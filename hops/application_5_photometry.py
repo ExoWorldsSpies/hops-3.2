@@ -737,6 +737,10 @@ class PhotometryWindow(MainWindow):
                                      text, color='r', va='top', ha='left')
             self.fits_figure.ax.add_patch(arrow)
 
+            arrow = mpatches.Arrow(target_x[0] - 3 * self.fits_header[self.log.psf_key] - dd,
+                                   target_y[0] - 3 * self.fits_header[self.log.psf_key] - dd,
+                                   dd, dd, width=dd / 3, color='r')
+
             # for ii in self.plate_solution['identified_stars']:
             #     circle = mpatches.Circle((self.plate_solution['identified_stars'][ii]['x'] + 0.5,
             #                               self.plate_solution['identified_stars'][ii]['y'] + 0.5),
