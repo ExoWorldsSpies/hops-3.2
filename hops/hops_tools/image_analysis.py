@@ -1,15 +1,19 @@
 
 import sys
 import numpy as np
-import twirl
+
 import hops.pylightcurve41 as plc
+from hops.thirdparty import twirl
 
 from astropy import wcs
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, Distance
+from astropy.time import Time as astrotime
+import astropy.units as u
 from astropy.wcs.utils import fit_wcs_from_points, pixel_to_skycoord
 from photutils.aperture import CircularAperture, aperture_photometry
 
-from .centroids_and_stars import _find_centroids, _star_from_centroid, _separation, _get_gaia_stars
+from .centroids_and_stars import _find_centroids, _star_from_centroid
+from .gaia import separation
 
 
 def image_mean_std(fits_data,
@@ -29,6 +33,10 @@ def image_mean_std(fits_data,
 
     else:
         try:
+            if np.sum((test_data/256.0-np.int_(test_data/256.0)) == 0) > len(test_data)/2:
+                distribution = plc.one_d_distribution(fits_data/256.0, samples=samples, gaussian_fit=True,
+                                                      mad_filter=mad_filter)
+                return 256.0 * distribution[2], 256.0 * distribution[3]
             if np.sum((test_data/64.0-np.int_(test_data/64.0)) == 0) > len(test_data)/2:
                 distribution = plc.one_d_distribution(fits_data/64.0, samples=samples, gaussian_fit=True,
                                                       mad_filter=mad_filter)
@@ -54,7 +62,7 @@ def image_mean_std(fits_data,
 def image_burn_limit(fits_header, key=None):
 
     if key and key in fits_header:
-        return(fits_header[key])
+        return fits_header[key]
 
     else:
         return min(65535, int(2 ** abs(fits_header['BITPIX']) - 1))
@@ -62,7 +70,7 @@ def image_burn_limit(fits_header, key=None):
 
 def image_psf(fits_data, fits_header,
               mean=None, std=None, burn_limit=None,
-              sample=10, psf_guess=2):
+              sample=10, psf_guess=2, centroids_snr=3, stars_snr=4):
 
     if mean is None or std is None:
         mean, std = image_mean_std(fits_data)
@@ -73,9 +81,9 @@ def image_psf(fits_data, fits_header,
     # t0 = time.time()
 
     centroids = []
-    snr = 54
+    snr = 50 + centroids_snr
 
-    while len(centroids) < sample * 2 and snr >= 4.0:
+    while len(centroids) < sample * 2 and snr >= centroids_snr:
         centroids = _find_centroids(fits_data, -10, 10**10, -10, 10**10, mean, std, 0.9 * burn_limit, psf_guess, snr)
         snr -= 10
 
@@ -86,7 +94,7 @@ def image_psf(fits_data, fits_header,
     psf_err = []
 
     for centroid in centroids:
-        star = _star_from_centroid(fits_data, centroid[1], centroid[2], mean, std, burn_limit, psf_guess)
+        star = _star_from_centroid(fits_data, centroid[1], centroid[2], mean, std, burn_limit, psf_guess, stars_snr)
 
         if star:
 
@@ -108,10 +116,10 @@ def image_psf(fits_data, fits_header,
 
 def image_find_stars(fits_data, fits_header, x_low=0, x_upper=None, y_low=0, y_upper=None, x_centre=None, y_centre=None,
                      mean=None, std=None, burn_limit=None, psf=None,
-                     snr=4.0, psf_variation_allowed=0.5,
-                     aperture=3, sky_inner_aperture=1.7, sky_outer_aperture=2.4,
+                     centroids_snr=3.0, stars_snr=4.0, psf_variation_allowed=0.5,
+                     relative_aperture=3, absolute_aperture=None, sky_inner_aperture=1.7, sky_outer_aperture=2.4,
                      order_by_flux=True, star_limit=None,
-                     progress_window=None, verbose=False):
+                     progress_window=None, verbose=False, fit_effort=1):
 
     if verbose:
         print('\nAnalysing frame...')
@@ -139,7 +147,9 @@ def image_find_stars(fits_data, fits_header, x_low=0, x_upper=None, y_low=0, y_u
 
     fits_data_size_y, fits_data_size_x = fits_data.shape
 
-    centroids = _find_centroids(fits_data, x_low, x_upper, y_low, y_upper, mean, std, burn_limit, psf, snr)
+    centroids = _find_centroids(fits_data, x_low, x_upper, y_low, y_upper, mean, std, burn_limit, psf, centroids_snr)
+
+    centroids = sorted(centroids, key=lambda x: np.sqrt((x[1] - x_centre) ** 2 + (x[2] - y_centre) ** 2))
 
     if progress_window:
         if progress_window.exit:
@@ -151,7 +161,7 @@ def image_find_stars(fits_data, fits_header, x_low=0, x_upper=None, y_low=0, y_u
 
     for num, centroid in enumerate(centroids):
 
-        star = _star_from_centroid(fits_data, centroid[1], centroid[2], mean, std, burn_limit, psf, snr)
+        star = _star_from_centroid(fits_data, centroid[1], centroid[2], mean, std, burn_limit, psf, stars_snr, fit_effort=fit_effort, verbose=verbose)
 
         if star:
 
@@ -160,7 +170,9 @@ def image_find_stars(fits_data, fits_header, x_low=0, x_upper=None, y_low=0, y_u
                 if len(stars) == 0 or np.min([np.sqrt((ff[0]-star[0][2])**2 + (ff[1]-star[0][3])**2) for ff in stars]) > psf:
 
                     x_mean, y_mean = star[0][2], star[0][3]
-                    ap = aperture * star[0][4]
+                    ap = relative_aperture * star[0][4]
+                    if absolute_aperture is not None:
+                        ap = absolute_aperture
 
                     if x_mean - ap < 0 or x_mean + ap > fits_data_size_x or y_mean - ap < 0 or y_mean + ap > fits_data_size_y:
                         pass
@@ -169,33 +181,52 @@ def image_find_stars(fits_data, fits_header, x_low=0, x_upper=None, y_low=0, y_u
                                                                                      ap))['aperture_sum'][0]
                         total_area = np.pi * ap * ap
 
-                        sky_area_1 = ap * sky_inner_aperture
-                        sky_area_2 = ap * sky_outer_aperture
-                        sky_area_1, sky_area_2 = min(sky_area_2, sky_area_1), max(sky_area_2, sky_area_1)
+                        sky_radius_1 = ap * sky_inner_aperture
+                        sky_radius_2 = ap * sky_outer_aperture
+                        sky_radius_1, sky_radius_2 = min(sky_radius_2, sky_radius_1), max(sky_radius_2, sky_radius_1)
 
-                        y_min = int(max(int(y_mean - sky_area_2), 0))
-                        y_max = int(min(int(y_mean + sky_area_2), len(fits_data) - 1))
-                        x_min = int(max(int(x_mean - sky_area_2), 0))
-                        x_max = int(min(int(x_mean + sky_area_2), len(fits_data[0]) - 1))
-                        datax, datay = np.meshgrid(np.arange(x_min, x_max + 1) + 0.5,
-                                                   np.arange(y_min, y_max + 1) + 0.5)
+                        sky_y_min = int(max(int(y_mean - sky_radius_2), 0))
+                        sky_y_max = int(min(int(y_mean + sky_radius_2), len(fits_data) - 1))
+                        sky_x_min = int(max(int(x_mean - sky_radius_2), 0))
+                        sky_x_max = int(min(int(x_mean + sky_radius_2), len(fits_data[0]) - 1))
+                        sky_datax, sky_datay = np.meshgrid(np.arange(sky_x_min, sky_x_max + 1) + 0.5,
+                                                           np.arange(sky_y_min, sky_y_max + 1) + 0.5)
 
-                        sky_area = fits_data[y_min:y_max + 1, x_min:x_max + 1]
-                        sky_area = np.ones_like(sky_area) * sky_area
+                        sky_data = fits_data[sky_y_min:sky_y_max + 1, sky_x_min:sky_x_max + 1]
+                        sky_data = np.ones_like(sky_data) * sky_data
 
-                        sky_area = sky_area[np.where((((datax - x_mean)**2 + (datay - y_mean)**2) > sky_area_1**2) * (sky_area < star[0][1] + 3 * std))]
+                        sky, sky_error = plc.mean_std_from_median_mad(sky_data)
 
-                        sky, sky_error = plc.mean_std_from_median_mad(sky_area)
+                        sky_data = sky_data[np.where((((sky_datax - x_mean)**2 + (sky_datay - y_mean)**2) > sky_radius_1**2) * (sky_data < sky + 3 * sky_error))]
+                        sky_area = len(sky_data.flatten())
+
+                        sky, sky_error = plc.mean_std_from_median_mad(sky_data)
 
                         sky_flux = sky * total_area
-                        sky_flux_unc = np.sqrt(total_area * sky_error * sky_error)
 
                         target_flux = total_flux - sky_flux
 
-                        stars.append([
-                            star[0][2], star[0][3], star[0][0], star[0][1], star[0][4], star[0][5],
-                            total_flux, target_flux, sky_flux, sky_flux_unc
-                        ])
+                        if target_flux > 0 and sky_area>0:
+
+                            sky_flux_unc = np.sqrt(total_area * (1 + total_area / sky_area) * sky_error * sky_error)
+
+                            stars.append([
+                                star[0][2], star[0][3], star[0][0], star[0][1], star[0][4], star[0][5],
+                                total_flux, target_flux, sky_flux, sky_flux_unc
+                            ])
+
+                        else:
+                            if verbose == 'deep':
+                                print('negative flux ??')
+                                print(ap, total_flux, total_area, sky_flux)
+
+                else:
+                    if verbose == 'deep':
+                        print('????????')
+
+            else:
+                if verbose == 'deep':
+                    print('PSF filtering: ', star[0][4], np.sqrt(star[1][4][4]), psf,  psf_variation_allowed, abs(star[0][4] - psf), (3 * np.sqrt(star[1][4][4]) + psf * psf_variation_allowed), psf * psf_variation_allowed)
 
             if verbose:
                 sys.stdout.write('\r\033[K')
@@ -212,9 +243,6 @@ def image_find_stars(fits_data, fits_header, x_low=0, x_upper=None, y_low=0, y_u
 
         if order_by_flux is True:
             stars = sorted(stars, key=lambda x: -x[7])
-        else:
-
-            stars = sorted(stars, key=lambda x: np.sqrt((x[0] - x_centre) ** 2 + (x[1] - y_centre) ** 2))
 
         return stars
 
@@ -222,9 +250,18 @@ def image_find_stars(fits_data, fits_header, x_low=0, x_upper=None, y_low=0, y_u
         return None
 
 
-def image_plate_solve(fits_data, fits_header, ra, dec,
+def image_plate_solve(fits_data, fits_header, ra, dec, timestamp,
                       mean=None, std=None, burn_limit=None, psf=None, stars=None, n=20, pixel=None,
-                      progress_window=None, verbose=False, gaia_engine=_get_gaia_stars):
+                      progress_window=None, verbose=False, gaia_query_ext=None,
+                      gaia_engine=None, initial_wcs=None, star_limit=None, sip_degree=3):
+
+    if gaia_engine is None:
+        from .gaia import OnlineGAIA
+        gaia_engine = OnlineGAIA().get_gaia_stars
+
+    elif isinstance(gaia_engine, str):
+        from .gaia import LocalGAIA
+        gaia_engine = LocalGAIA(gaia_engine).get_gaia_stars
 
     if verbose:
         print('\nAnalysing frame...')
@@ -241,83 +278,181 @@ def image_plate_solve(fits_data, fits_header, ra, dec,
     if type(stars) == type(None):
         stars = image_find_stars(fits_data, fits_header,
                                  mean=mean, std=std, burn_limit=burn_limit, psf=psf,
-                                 progress_window=progress_window, verbose=verbose)
+                                 progress_window=progress_window, verbose=verbose, star_limit=star_limit)
 
     stars = np.array(stars)
 
+    detected_stars = np.array([[star[0], star[1]] for star in stars])
+    # x0, y0 = len(fits_data[0]) / 2, len(fits_data) / 2
+    # detected_stars_in = detected_stars[
+    #     np.where(np.sqrt((detected_stars[:, 0] - x0) ** 2 + (detected_stars[:, 1] - y0) ** 2) < min(x0, y0))]
+    # detected_stars_in = detected_stars_in[:2 * n]
+    detected_stars_in = detected_stars[:2 * n]
+
+    tolerance = 3 * psf
+
+
     if pixel is None:
         pixel = 2.0 / psf
-    default_wcs = wcs.WCS(naxis=2)
-    default_wcs.wcs.ctype = ["RA---ARC", "DEC--ARC"]
-    default_wcs.wcs.crpix=np.array(fits_data.shape)[::-1]/2
-    default_wcs.wcs.crval=np.array([ra, dec])
-    default_wcs.wcs.pc[0][0] = -pixel/60/60
-    default_wcs.wcs.pc[1][1] = -pixel/60/60
 
-    ra1, dec1 = default_wcs.all_pix2world([[0, 0]], 0)[0]
-    ra2, dec2 = default_wcs.all_pix2world([[0, len(fits_data)]], 0)[0]
-    ra3, dec3 = default_wcs.all_pix2world([[len(fits_data[0]), len(fits_data)]], 0)[0]
-    ra4, dec4 = default_wcs.all_pix2world([[len(fits_data[0]), 0]], 0)[0]
+    if initial_wcs is None:
+        default_wcs_A = wcs.WCS(naxis=2)
+        default_wcs_A.wcs.ctype = ["RA---ARC", "DEC--ARC"]
+        default_wcs_A.wcs.crpix=np.array(fits_data.shape)[::-1]/2
+        default_wcs_A.wcs.crval=np.array([ra, dec])
+        default_wcs_A.wcs.pc[0][0] = -pixel / 60 / 60
+        default_wcs_A.wcs.pc[1][1] = -pixel / 60 / 60
+    else:
+        default_wcs_A = initial_wcs
 
-    fov_radius = max([_separation(ra, dec, ra1, dec1), _separation(ra, dec, ra2, dec2),
-                      _separation(ra, dec, ra3, dec3), _separation(ra, dec, ra4, dec4)])
+    ra1, dec1 = default_wcs_A.all_pix2world([[0, 0]], 0)[0]
+    ra2, dec2 = default_wcs_A.all_pix2world([[0, len(fits_data)]], 0)[0]
+    ra3, dec3 = default_wcs_A.all_pix2world([[len(fits_data[0]), len(fits_data)]], 0)[0]
+    ra4, dec4 = default_wcs_A.all_pix2world([[len(fits_data[0]), 0]], 0)[0]
+
+    fov_radius = max([separation(ra, dec, ra1, dec1), separation(ra, dec, ra2, dec2),
+                      separation(ra, dec, ra3, dec3), separation(ra, dec, ra4, dec4)])
 
     if verbose:
         print('Initial FOV radius guess: ', fov_radius)
 
-    x0, y0 = len(fits_data[0])/2, len(fits_data)/2
+    if gaia_query_ext is None:
 
-    gaia_query = gaia_engine(ra, dec, 2.0 * fov_radius, 9 * len(stars))
+        if len(stars) < n:
+            gaia_query = gaia_engine(ra, dec, min(1.0, 1.5 * fov_radius), min(100, 10 * len(stars)))
+        else:
+            gaia_query = gaia_engine(ra, dec, min(0.5, 1.5 * fov_radius), min(100, 10 * len(stars)))
+
+    else:
+        if len(stars) < n:
+            selection = np.where(
+                separation(ra, dec, gaia_query_ext['ra'], gaia_query_ext['dec']) < min(1.0, 1.5 * fov_radius))
+            gaia_query = (gaia_query_ext.copy())[selection][:min(100, 10 * len(stars))]
+        else:
+            selection = np.where(
+                separation(ra, dec, gaia_query_ext['ra'], gaia_query_ext['dec']) < min(0.5, 1.5 * fov_radius))
+            gaia_query = (gaia_query_ext.copy())[selection][:min(100, 10 * len(stars))]
+
+    for gaia_star_idx in range(len(gaia_query['ra'])):
+        gaia_star = SkyCoord(ra=gaia_query[gaia_star_idx]['ra'] * u.deg,
+                             dec=gaia_query[gaia_star_idx]['dec'] * u.deg,
+                             distance=Distance(parallax=gaia_query[gaia_star_idx]['parallax'] * u.mas),
+                             pm_ra_cosdec=gaia_query[gaia_star_idx]['pmra'] * u.mas / u.yr,
+                             pm_dec=gaia_query[gaia_star_idx]['pmdec'] * u.mas / u.yr,
+                             obstime=astrotime(2016.0, format='jyear', scale='tcb'))
+
+        gaia_star_today = gaia_star.apply_space_motion(astrotime(timestamp))
+
+        gaia_query[gaia_star_idx]['ra'] = gaia_star_today.ra.deg
+        gaia_query[gaia_star_idx]['dec'] = gaia_star_today.dec.deg
+
     gaia_stars = np.array([[star['ra'], star['dec']] for star in gaia_query])
 
-    xx = np.array(default_wcs.wcs_world2pix(gaia_stars[:,0], gaia_stars[:,1], 1))
+    gaia_stars_in_A = gaia_stars
+    gaia_stars_in_A = gaia_stars_in_A[:2*n]
 
-    gaia_stars_in = gaia_stars[np.where(np.sqrt((xx[0] - x0)**2 + (xx[1] - y0)**2) < min(x0, y0))]
-    gaia_stars_in = gaia_stars_in[:2*n]
+    projected_gaia_stars_in_A = np.array(default_wcs_A.wcs_world2pix(gaia_stars_in_A[:,0], gaia_stars_in_A[:,1], 1)).T
 
-    projected_gaia_stars_in = np.array(default_wcs.wcs_world2pix(gaia_stars_in[:,0], gaia_stars_in[:,1], 1)).T
 
-    detected_stars = np.array([[star[0], star[1]] for star in stars])
-    detected_stars_in = detected_stars[np.where(np.sqrt((detected_stars[:,0] - x0)**2 + (detected_stars[:,1] - y0)**2) < min(x0, y0))]
-    detected_stars_in = detected_stars_in[:2*n]
+    X_A = twirl.utils.find_transform(projected_gaia_stars_in_A, detected_stars_in, n=n, tolerance=tolerance)
 
-    tolerance = 3 * psf
-    X = twirl.utils.find_transform(projected_gaia_stars_in, detected_stars_in, n=n, tolerance=tolerance)
+    projected_gaia_stars_A = np.array(default_wcs_A.wcs_world2pix(gaia_stars[:,0], gaia_stars[:,1], 1)).T
+    transformed_projected_gaia_stars_A = twirl.utils.affine_transform(X_A)(projected_gaia_stars_A)
 
-    projected_gaia_stars = np.array(default_wcs.wcs_world2pix(gaia_stars[:,0], gaia_stars[:,1], 1)).T
-    transformed_projected_gaia_stars = twirl.utils.affine_transform(X)(projected_gaia_stars)
-
-    central_transformed_projected_gaia_star = gaia_stars[sorted(
-        np.arange(len(transformed_projected_gaia_stars)),
+    central_transformed_projected_gaia_star_A = gaia_stars[sorted(
+        np.arange(len(transformed_projected_gaia_stars_A)),
         key=lambda x: np.sqrt(
-            (transformed_projected_gaia_stars[x][0] - len(fits_data[0])/2)**2 +
-            (transformed_projected_gaia_stars[x][1] - len(fits_data)/2)**2)
+            (transformed_projected_gaia_stars_A[x][0] - len(fits_data[0])/2)**2 +
+            (transformed_projected_gaia_stars_A[x][1] - len(fits_data)/2)**2)
     )[0]]
 
-    s1, s2 = twirl.utils.cross_match(
-        transformed_projected_gaia_stars,
+    s1_A, s2_A = twirl.utils.cross_match(
+        transformed_projected_gaia_stars_A,
         detected_stars,
         return_ixds=True, tolerance=tolerance).T
 
-    plate_solution = fit_wcs_from_points(
-        detected_stars[s2].T,
-        SkyCoord(gaia_stars[s1], unit="deg"),
-        proj_point = SkyCoord(*(central_transformed_projected_gaia_star + 0.01), unit="deg"),
-        sip_degree=3,
-    )
+    # test flipped
+
+    default_wcs_B = wcs.WCS(naxis=2)
+    default_wcs_B.wcs.ctype = ["RA---ARC", "DEC--ARC"]
+    default_wcs_B.wcs.crpix=np.array(fits_data.shape)[::-1]/2
+    default_wcs_B.wcs.crval=np.array([ra, dec])
+    default_wcs_B.wcs.pc[0][0] = pixel / 60 / 60
+    default_wcs_B.wcs.pc[1][1] = -pixel / 60 / 60
+
+    gaia_stars_in_B = gaia_stars
+    gaia_stars_in_B = gaia_stars_in_B[:2*n]
+
+    projected_gaia_stars_in_B = np.array(default_wcs_B.wcs_world2pix(gaia_stars_in_B[:,0], gaia_stars_in_B[:,1], 1)).T
+
+
+    X_B = twirl.utils.find_transform(projected_gaia_stars_in_B, detected_stars_in, n=n, tolerance=tolerance)
+
+    projected_gaia_stars_B = np.array(default_wcs_B.wcs_world2pix(gaia_stars[:,0], gaia_stars[:,1], 1)).T
+    transformed_projected_gaia_stars_B = twirl.utils.affine_transform(X_B)(projected_gaia_stars_B)
+
+    central_transformed_projected_gaia_star_B = gaia_stars[sorted(
+        np.arange(len(transformed_projected_gaia_stars_B)),
+        key=lambda x: np.sqrt(
+            (transformed_projected_gaia_stars_B[x][0] - len(fits_data[0])/2)**2 +
+            (transformed_projected_gaia_stars_B[x][1] - len(fits_data)/2)**2)
+    )[0]]
+
+    s1_B, s2_B = twirl.utils.cross_match(
+        transformed_projected_gaia_stars_B,
+        detected_stars,
+        return_ixds=True, tolerance=tolerance).T
+
+
+    if len(s1_A) >= len(s1_B):
+        plate_solution = fit_wcs_from_points(
+            detected_stars[s2_A].T,
+            SkyCoord(gaia_stars[s1_A], unit="deg"),
+            proj_point=SkyCoord(*(central_transformed_projected_gaia_star_A + 0.01), unit="deg"),
+            sip_degree=sip_degree,
+        )
+    else:
+        plate_solution = fit_wcs_from_points(
+            detected_stars[s2_B].T,
+            SkyCoord(gaia_stars[s1_B], unit="deg"),
+            proj_point=SkyCoord(*(central_transformed_projected_gaia_star_B + 0.01), unit="deg"),
+            sip_degree=sip_degree,
+        )
+
+    ra, dec = plate_solution.all_pix2world([[len(fits_data[0])/2, len(fits_data)/2]], 0)[0]
+
+    if verbose:
+        print('Refined RA/DEC: ', ra, dec)
 
     ra1, dec1 = plate_solution.all_pix2world([[0, 0]], 0)[0]
     ra2, dec2 = plate_solution.all_pix2world([[0, len(fits_data)]], 0)[0]
     ra3, dec3 = plate_solution.all_pix2world([[len(fits_data[0]), len(fits_data)]], 0)[0]
     ra4, dec4 = plate_solution.all_pix2world([[len(fits_data[0]), 0]], 0)[0]
 
-    fov_radius = max([_separation(ra, dec, ra1, dec1), _separation(ra, dec, ra2, dec2),
-                      _separation(ra, dec, ra3, dec3), _separation(ra, dec, ra4, dec4)])
+    fov_radius = max([separation(ra, dec, ra1, dec1), separation(ra, dec, ra2, dec2),
+                      separation(ra, dec, ra3, dec3), separation(ra, dec, ra4, dec4)])
 
     if verbose:
         print('Final FOV radius: ', fov_radius)
 
-    gaia_query = gaia_engine(ra, dec, fov_radius, 8 * len(stars))
+    if gaia_query_ext is None:
+        gaia_query = gaia_engine(ra, dec, min(2,fov_radius), 10 * len(stars))
+    else:
+        gaia_query = gaia_query_ext.copy()
+
+    for gaia_star_idx in range(len(gaia_query['ra'])):
+        gaia_star = SkyCoord(ra=gaia_query[gaia_star_idx]['ra'] * u.deg,
+                             dec=gaia_query[gaia_star_idx]['dec'] * u.deg,
+                             distance=Distance(parallax=gaia_query[gaia_star_idx]['parallax'] * u.mas),
+                             pm_ra_cosdec=gaia_query[gaia_star_idx]['pmra'] * u.mas / u.yr,
+                             pm_dec=gaia_query[gaia_star_idx]['pmdec'] * u.mas / u.yr,
+                             obstime=astrotime(2016.0, format='jyear', scale='tcb'))
+
+        gaia_star_today = gaia_star.apply_space_motion(astrotime(timestamp))
+
+        gaia_query[gaia_star_idx]['ra'] = gaia_star_today.ra.deg
+        gaia_query[gaia_star_idx]['dec'] = gaia_star_today.dec.deg
+
     gaia_stars = np.array([[star['ra'], star['dec']] for star in gaia_query])
 
     transformed_projected_gaia_stars = np.array(plate_solution.wcs_world2pix(gaia_stars[:,0], gaia_stars[:,1], 1)).T
@@ -330,8 +465,31 @@ def image_plate_solve(fits_data, fits_header, ra, dec,
     plate_solution = fit_wcs_from_points(
         detected_stars[s2].T,
         SkyCoord(gaia_stars[s1], unit="deg"),
-        proj_point = SkyCoord(*(central_transformed_projected_gaia_star + 0.01), unit="deg"),
-        sip_degree=3,
+        sip_degree=sip_degree,
+    )
+
+    final_s1 = []
+    final_s2 = []
+
+    for i in range(len(s2)):
+        if list(s2).count(s2[i]) == 1:
+            final_s1.append(s1[i])
+            final_s2.append(s2[i])
+        else:
+            test_xy = plate_solution.world_to_pixel(SkyCoord(gaia_stars[s1], unit="deg"))
+            dist = (test_xy[0] - (detected_stars[s2].T)[0])**2 + (test_xy[1] - (detected_stars[s2].T)[1])**2
+            dist += (10**10)*(s2 != s2[i])
+            if np.argmin(dist) == i:
+                final_s1.append(s1[i])
+                final_s2.append(s2[i])
+
+    s1 = np.array(final_s1)
+    s2 = np.array(final_s2)
+
+    plate_solution = fit_wcs_from_points(
+        detected_stars[s2].T,
+        SkyCoord(gaia_stars[s1], unit="deg"),
+        sip_degree=sip_degree,
     )
 
     source_id_key = 'source_id'
@@ -340,6 +498,7 @@ def image_plate_solve(fits_data, fits_header, ra, dec,
 
     identified_stars = {
         'plate_solution': plate_solution,
+        'gaia_query': gaia_query,
         'identified_stars': {
             gaia_query[source_id_key][s1][nn]:{
                 'ra': gaia_query['ra'][s1][nn],
@@ -362,28 +521,41 @@ def image_plate_solve(fits_data, fits_header, ra, dec,
         }
     }
 
+    del gaia_query
+
     return identified_stars
 
 
-def bin_frame(data_frame, binning):
 
-    binning = int(binning)
 
-    if binning <= 1:
-        return data_frame
+def cartesian_to_polar(x_position, y_position, x_ref_position, y_ref_position):
 
-    new_frame = []
-    for xx in range(len(data_frame))[::binning]:
-        new_frame.append(list(np.sum(data_frame[xx:xx + binning], 0)))
+    radius = np.sqrt((x_position - x_ref_position) ** 2 + (y_position - y_ref_position) ** 2)
 
-    new_frame = np.swapaxes(np.array(new_frame), 0, 1)
+    if (x_position - x_ref_position) > 0:
+        if (y_position - y_ref_position) >= 0:
+            angle = np.arctan((y_position - y_ref_position) / (x_position - x_ref_position))
+        else:
+            angle = 2.0 * np.pi + np.arctan((y_position - y_ref_position) / (x_position - x_ref_position))
+    elif (x_position - x_ref_position) < 0:
+        angle = np.arctan((y_position - y_ref_position) / (x_position - x_ref_position)) + np.pi
+    else:
+        if (y_position - y_ref_position) >= 0:
+            angle = np.pi / 2
+        else:
+            angle = 3 * np.pi / 2
 
-    new_frame2 = []
-    for xx in range(len(new_frame))[::binning]:
-        new_frame2.append(list(np.sum(new_frame[xx:xx + binning], 0)))
+    return radius, angle
 
-    data_frame = np.swapaxes(np.array(new_frame2), 0, 1)
 
-    return data_frame
+def drift_rotate(x_position, y_position, x_ref_position, y_ref_position, dx, dy, dtheta):
 
+    rr, tt = cartesian_to_polar(x_position, y_position, x_ref_position, y_ref_position)
+
+    tt = tt + dtheta
+
+    xx = x_ref_position + rr * np.cos(tt) + dx
+    yy = y_ref_position + rr * np.sin(tt) + dy
+
+    return xx, yy
 

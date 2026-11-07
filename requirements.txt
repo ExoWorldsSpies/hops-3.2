@@ -15,4 +15,4 @@ exotethys>=2.0.15
 click
 twirl==0.1.3
 photutils
-exoclock
+exoclock>=1.0.1

@@ -15,6 +15,7 @@ the following information (in order):
 1. exposure start time in JD_UTC
 2. relative flux (flux of the target divided by the sum of all the comparison stars)
 3. relative flux uncertainty
+4. exposure time in seconds
 
 CAUTION!!!!!!!
 The uncertainties reported do not take into account the gain and the read-noise of the camera.
@@ -27,6 +28,7 @@ the following information (in order):
 1. exposure start time in JD_UTC
 2. relative flux (flux of the target divided by the sum of all the comparison stars)
 3. relative flux uncertainty
+4. exposure time in seconds
 
 CAUTION!!!!!!!
 The uncertainties reported do not take into account the gain and the read-noise of the camera.
@@ -38,10 +40,11 @@ Contains all the data related to the aperture photometry method. The columns con
 the following information (in order):
 1. file name
 2. exposure start time in JD_UTC
-3. target x position in pixels
-4. comparison 1 x position in pixels
-5 comparison 2 x position in pixels
-6 comparison 3 x position in pixels
+3. exposure time in seconds
+4. target x position in pixels
+5. comparison 1 x position in pixels
+6 comparison 2 x position in pixels
+7 comparison 3 x position in pixels
 ...
 . target y position in pixels
 . comparison 1 y position in pixels
@@ -74,10 +77,11 @@ Contains all the data related to the PSF fitting photometry method. The columns 
 the following information (in order):
 1. file name
 2. exposure start time in JD_UTC
-3. target x position in pixels
-4. comparison 1 x position in pixels
-5 comparison 2 x position in pixels
-6 comparison 3 x position in pixels
+3. exposure time in seconds
+4. target x position in pixels
+5. comparison 1 x position in pixels
+6 comparison 2 x position in pixels
+7 comparison 3 x position in pixels
 . comparison 2 x position in pixels
 . comparison 3 x position in pixels
 ...

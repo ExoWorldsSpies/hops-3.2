@@ -1,12 +1,12 @@
 
 import os
 import numpy as np
-import hops.pylightcurve41 as plc
+import exoclock
 
 from astropy.io import fits as pf
 
-from hops.hops_tools.fits import *
-from hops.hops_tools.image_analysis import bin_frame
+from hops.hops_tools.files import find_fits_files, save_fits, get_fits_data_and_header
+from hops.hops_tools.reduction import bin_frame
 
 from .application_windows import MainWindow, AddOnWindow
 
@@ -50,6 +50,10 @@ filter_translations = {
 
 __location__ = os.path.abspath(os.path.dirname(__file__))
 
+try:
+    _ = exoclock.simbad_search_by_name('M27')
+except:
+    _ = exoclock.simbad_search_by_name('M27')
 
 class DataTargetWindow(MainWindow):
 
@@ -60,7 +64,7 @@ class DataTargetWindow(MainWindow):
         # extra windows
 
         self.content_window = AddOnWindow(self, name='Files list', sizex=3, sizey=3, position=1)
-        self.header_window = AddOnWindow(self, name='Header keywords list', sizex=3, sizey=3, position=7)
+        self.header_window = AddOnWindow(self, name='Header keywords list', sizex=5, sizey=3, position=7)
         self.target_window = AddOnWindow(self, name='Select/Change target')
         self.location_window = AddOnWindow(self, name='Select/Change location')
         self.advanced_settings_window = AddOnWindow(self, name='Advanced settings', position=2)
@@ -73,73 +77,73 @@ class DataTargetWindow(MainWindow):
         self.directory_test = self.Label(text=self.log.get_param('directory_short'))
 
         self.observation_files = self.Entry(value=self.log.get_param('observation_files'), instance=str,
-                                            command=self.update_observation_files)
+                                            commands=[self.update_observation_files])
         self.observation_files_test = self.Label(text=' ')
         self.science_files = 0
         self.science_name = ''
         self.science_header = []
         self.science_data = None
 
-        self.show_files_button = self.Button(text='Show files', command=self.content_window.show)
+        self.show_files_button = self.Button(text='Show files', commands=[self.content_window.show])
 
         self.bias_files = self.Entry(value=self.log.get_param('bias_files'), instance=str,
-                                     command=self.update_bias_files)
+                                     commands=[self.update_bias_files])
         self.bias_files_test = self.Label(text=' ')
 
         self.dark_files = self.Entry(value=self.log.get_param('dark_files'), instance=str,
-                                     command=self.update_dark_files)
+                                     commands=[self.update_dark_files])
         self.dark_files_test = self.Label(text=' ')
 
         self.dark_flat_files = self.Entry(value=self.log.get_param('darkf_files'), instance=str,
-                                     command=self.update_dark_flat_files)
+                                     commands=[self.update_dark_flat_files])
         self.dark_flat_files_test = self.Label(text=' ')
 
         self.flat_files = self.Entry(value=self.log.get_param('flat_files'), instance=str,
-                                     command=self.update_flat_files)
+                                     commands=[self.update_flat_files])
         self.flat_files_test = self.Label(text=' ')
 
-        self.show_header_button = self.Button(text='Show header', command=self.header_window.show)
+        self.show_header_button = self.Button(text='Show header', commands=[self.header_window.show])
 
         self.exposure_time_key = self.Entry(value=self.log.get_param('exposure_time_key'), instance=str,
-                                            command=self.update_exposure_time_key)
+                                            commands=[self.update_exposure_time_key])
         self.exposure_time_key_test = self.Label(text=' ')
 
         self.observation_date_key = self.Entry(value=self.log.get_param('observation_date_key'), instance=str,
-                                               command=self.update_observation_date_key)
+                                               commands=[self.update_observation_date_key])
         self.observation_date_key_test = self.Label(text=' ')
 
         self.observation_time_key = self.Entry(value=self.log.get_param('observation_time_key'), instance=str,
-                                               command=self.update_observation_time_key)
+                                               commands=[self.update_observation_time_key])
         self.observation_time_key_test = self.Label(text=' ')
 
         self.time_stamp = self.DropDown(initial=self.log.get_param('time_stamp'),
                                         instance=str,
                                         options=['exposure start', 'mid-exposure', 'exposure end'])
 
-        self.select_target_button = self.Button(text='Select/Change target', command=self.target_window.show)
+        self.select_target_button = self.Button(text='Select/Change target', commands=[self.target_window.show])
         self.target_ra_dec = self.Label(text=self.log.get_param('target_ra_dec'))
         self.target_name = self.Label(text=self.log.get_param('target_name'))
         self.target_ra_dec_test = self.Label(text='')
 
-        self.select_location_button = self.Button(text='Select/Change location', command=self.location_window.show)
+        self.select_location_button = self.Button(text='Select/Change location', commands=[self.location_window.show])
         self.location = self.Label(text=self.log.get_param('location'))
         self.location_test = self.Label(text='')
 
         filters = ['No filter chosen'] + list(filter_map.keys())
         self.filter = self.DropDown(initial=self.log.get_param('filter'),
                                         instance=str,
-                                        options=filters, command=self.check_filter)
+                                        options=filters, commands=[self.check_filter])
         self.filter_test = self.Label(text=' ')
 
         self.show_advanced_settings_button = self.Button(text='Advanced settings',
-                                                         command=[self.update_preview, self.advanced_settings_window.show])
+                                                         commands=[self.update_preview, self.advanced_settings_window.show])
         self.show_observer_information_button = self.Button(text='Observer\'s information (optional)',
-                                                            command=self.observer_information_window.show)
+                                                            commands=[self.observer_information_window.show])
 
         self.save_and_return_button = self.Button(text='SAVE OPTIONS &\nRETURN TO MAIN MENU',
-                                                  command=self.save_and_return)
+                                                  commands=[self.save_and_return])
         self.save_and_proceed_button = self.Button(text='SAVE OPTIONS &\nPROCEED',
-                                                   command=self.save_and_proceed,
+                                                   commands=[self.save_and_proceed],
                                                    bg='green', highlightbackground='green')
 
         self.setup_window([
@@ -147,7 +151,7 @@ class DataTargetWindow(MainWindow):
             [
                 [self.Label(text='Directory:'), 1],
                 [self.directory_test, 2, 2],
-                [self.Button(text='Select/Change directory', command=self.change_directory), 5, 2],
+                [self.Button(text='Select/Change directory', commands=[self.change_directory]), 5, 2],
             ],
             [],
             [
@@ -220,6 +224,7 @@ class DataTargetWindow(MainWindow):
 
         # target window
 
+        self.simbad_status = self.target_window.Label(text=exoclock.get_simbad_status())
         self.target_ra_dec_choice = self.target_window.IntVar(self.log.get_param('target_ra_dec_choice'))
         self.target_ra_dec_choice_0 = self.target_window.Radiobutton(
             text='Use the RA/DEC found in the file\'s header:',
@@ -232,13 +237,17 @@ class DataTargetWindow(MainWindow):
             variable=self.target_ra_dec_choice, value=2, command=self.update_ra_dec)
         self.auto_target_ra_dec = self.target_window.Label(text=self.log.get_param('auto_target_ra_dec'))
         self.auto_target_ra_dec_check = self.target_window.Label(text='')
-        self.simbad_target_name = self.target_window.Entry(value=self.log.get_param('simbad_target_name'), command=self.update_ra_dec)
+        self.simbad_target_name = self.target_window.Entry(value=self.log.get_param('simbad_target_name'), commands=[self.update_ra_dec])
         self.simbad_target_name_check = self.target_window.Label(text='')
-        self.manual_target_ra_dec = self.target_window.Entry(value=self.log.get_param('manual_target_ra_dec'), command=self.update_ra_dec)
+        self.manual_target_ra_dec = self.target_window.Entry(value=self.log.get_param('manual_target_ra_dec'), commands=[self.update_ra_dec])
         self.target_ra_dec_2 = self.target_window.Label(text=self.log.get_param('target_ra_dec'))
         self.target_name_2 = self.target_window.Label(text=self.log.get_param('target_name'))
 
         self.target_window.setup_window([
+            [],
+            [[self.target_window.Label(text='Simbad connection status: '), 0, 5]],
+            [[self.simbad_status, 0, 5]],
+            [[self.target_window.Button(text='Attempt to reconnect', commands=[exoclock.reconnect_to_simbad, self.update_ra_dec]), 0, 5]],
             [],
             [[self.target_window.Label(text='How would you like to choose your target? Select one of the three options:'), 0, 5]],
             [],
@@ -249,8 +258,8 @@ class DataTargetWindow(MainWindow):
             [[self.target_window.Label(text='Target RA/DEC: '), 0], [self.target_ra_dec_2, 1, 3]],
             [[self.target_window.Label(text='Target Name: '), 0], [self.target_name_2, 1, 3]],
             [],
-            [[self.target_window.Button(text='  Cancel  ', command=self.target_window.hide), 2],
-             [self.target_window.Button(text='  Choose  ', command=self.choose_target), 3]],
+            [[self.target_window.Button(text='  Cancel  ', commands=[self.target_window.hide]), 2],
+             [self.target_window.Button(text='  Choose  ', commands=[self.choose_target]), 3]],
             []
 
         ], entries_wd=self.log.entries_width)
@@ -269,7 +278,7 @@ class DataTargetWindow(MainWindow):
             variable=self.location_choice, value=2, command=self.update_location)
         self.auto_location = self.location_window.Label(text=self.log.get_param('auto_location'))
         self.profile_location = self.location_window.Label(text=self.log.get_param('profile_location'))
-        self.manual_location = self.location_window.Entry(value=self.log.get_param('manual_location'), command=self.update_location)
+        self.manual_location = self.location_window.Entry(value=self.log.get_param('manual_location'), commands=[self.update_location])
 
         self.location_window.setup_window([
             [],
@@ -279,8 +288,8 @@ class DataTargetWindow(MainWindow):
             [[self.location_choice_1, 1], [self.profile_location, 2, 2]],
             [[self.location_choice_2, 1], [self.manual_location, 2, 2]],
             [],
-            [[self.location_window.Button(text='  Cancel  ', command=self.location_window.hide), 2],
-             [self.location_window.Button(text='  Choose  ', command=self.choose_location), 3]],
+            [[self.location_window.Button(text='  Cancel  ', commands=[self.location_window.hide]), 2],
+             [self.location_window.Button(text='  Choose  ', commands=[self.choose_location]), 3]],
             []
 
         ], entries_wd=self.log.entries_width)
@@ -289,10 +298,10 @@ class DataTargetWindow(MainWindow):
 
         self.bin_fits = self.advanced_settings_window.DropDown(initial=self.log.get_param('bin_fits'),
                                                                options=[1, 2, 3, 4],
-                                                               instance=int, command=self.update_preview_final)
+                                                               instance=int, commands=[self.update_preview_final])
         self.crop_edge_pixels = self.advanced_settings_window.DropDown(initial=self.log.get_param('crop_edge_pixels'),
                                                                        options=np.int_(np.arange(0, 50, 1)),
-                                                                       instance=int, command=self.update_preview_final)
+                                                                       instance=int, commands=[self.update_preview_final])
 
         self.crop_x1 = self.advanced_settings_window.Entry(value=self.log.get_param('crop_x1'), instance=int)
         self.crop_x2 = self.advanced_settings_window.Entry(value=self.log.get_param('crop_x2'), instance=int)
@@ -317,22 +326,22 @@ class DataTargetWindow(MainWindow):
                     text='To crop the original image (on the left panel),\n'
                          'zoom in to the area you want to select and then press "Select area".'
                 ), 0],
-                [self.advanced_settings_window.Button(text='Select area', command=self.crop_to_selected_area), 1]
+                [self.advanced_settings_window.Button(text='Select area', commands=[self.crop_to_selected_area]), 1],
             ],
             [
                 [self.advanced_settings_window.Label(
                     text='Remove pixels from the edge of the image,\n'
                          'useful for cameras with GPS data in the first rows/columns.'
                 ), 0],
-                [self.crop_edge_pixels, 1]
+                [self.crop_edge_pixels, 1],
             ],
             [
                 [self.advanced_settings_window.Label(text='Binning (use 2 for coloured cameras)'), 0],
                 [self.bin_fits, 1],
             ],
             [],
-            [[self.initial_figure_size, 0, 3], [self.final_figure_size, 3]],
-            [[self.initial_figure, 0, 3], [self.final_figure, 3]],
+            [[self.initial_figure_size, 0, 3], [self.final_figure_size, 3, 2]],
+            [[self.initial_figure, 0, 3], [self.final_figure, 3, 2]],
             [],
         ])
 
@@ -569,8 +578,8 @@ class DataTargetWindow(MainWindow):
         except:
             pass
 
-        hdu= pf.CompImageHDU(data=np.array(data_frame, dtype=np.int32))
-        plc.save_fits(pf.HDUList([pf.PrimaryHDU(), hdu]), '.test_size.fits')
+        hdu = pf.CompImageHDU(data=np.array(data_frame, dtype=np.int32))
+        save_fits(pf.HDUList([pf.PrimaryHDU(), hdu]), '.test_size.fits')
 
         self.final_figure_size.set(
             'Image after reduction: {0} MB'.format(round(os.stat('.test_size.fits').st_size/1024.0/1024.0, 2))
@@ -623,12 +632,12 @@ class DataTargetWindow(MainWindow):
         if ra and dec:
             try:
                 if isinstance(ra, str):
-                    target = plc.FixedTarget(plc.Hours(ra.replace(',', '.')),
-                                             plc.Degrees(dec.replace(',', '.')))
+                    target = exoclock.FixedTarget(exoclock.Hours(ra.replace(',', '.').replace(' ', ':')),
+                                                  exoclock.Degrees(dec.replace(',', '.').replace(' ', ':')))
                     self.auto_target_ra_dec.set(target.coord())
                     self.target_ra_dec_choice_0['state'] = self.NORMAL
                 elif isinstance(ra, float):
-                    target = plc.FixedTargetTarget(plc.Degrees(ra), plc.Degrees(dec))
+                    target = exoclock.FixedTarget(exoclock.Degrees(ra), exoclock.Degrees(dec))
                     self.auto_target_ra_dec.set(target.coord())
                     self.target_ra_dec_choice_0['state'] = self.NORMAL
             except:
@@ -646,13 +655,20 @@ class DataTargetWindow(MainWindow):
             self.manual_target_ra_dec.set('')
 
             try:
-                target = plc.FixedTarget(
-                    plc.Hours(self.auto_target_ra_dec.get().split(' ')[0]),
-                    plc.Degrees(self.auto_target_ra_dec.get().split(' ')[1])
+                target = exoclock.FixedTarget(
+                    exoclock.Hours(self.auto_target_ra_dec.get().split(' ')[0]),
+                    exoclock.Degrees(self.auto_target_ra_dec.get().split(' ')[1])
                 )
 
                 try:
-                    nearest = plc.simbad_search_by_coordinates(target.ra, target.dec, radius=plc.Degrees(0.25))
+                    nearest = exoclock.simbad_search_by_coordinates(target.ra, target.dec,
+                                                                    radius=exoclock.Degrees(0.25))
+                    nearest._notes = ''
+                    if len(nearest.all_names) > 0:
+                        test = list(set(nearest.all_names).intersection(list(exoclock.exoclock_data.ecc()['hosts'])))
+                        if len(test) > 0:
+                            nearest._notes = '/ Host of: ' + ', '.join(exoclock.exoclock_data.ecc()['hosts'][test[0]])
+
                     self.target_ra_dec_2.set(nearest.coord())
                     if nearest._notes:
                         self.target_name_2.set(nearest.name + ' ' + nearest._notes)
@@ -673,7 +689,13 @@ class DataTargetWindow(MainWindow):
             self.manual_target_ra_dec.set('')
 
             try:
-                nearest = plc.simbad_search_by_name(self.simbad_target_name.get())
+                nearest = exoclock.simbad_search_by_name(self.simbad_target_name.get())
+                nearest._notes = ''
+                if len(nearest.all_names) > 0:
+                    test = list(set(nearest.all_names).intersection(list(exoclock.exoclock_data.ecc()['hosts'])))
+                    if len(test) > 0:
+                        nearest._notes = '/ Host of: ' + ', '.join(exoclock.exoclock_data.ecc()['hosts'][test[0]])
+
                 self.target_ra_dec_2.set(nearest.coord())
                 if nearest._notes:
                     self.target_name_2.set(nearest.name + ' ' + nearest._notes)
@@ -692,11 +714,18 @@ class DataTargetWindow(MainWindow):
 
             try:
                 if len(self.manual_target_ra_dec.get().split(':')) == 5:
-                    target = plc.FixedTarget(
-                        plc.Hours(self.manual_target_ra_dec.get().split(' ')[0]),
-                        plc.Degrees(self.manual_target_ra_dec.get().split(' ')[1])
+                    target = exoclock.FixedTarget(
+                        exoclock.Hours(self.manual_target_ra_dec.get().split(' ')[0]),
+                        exoclock.Degrees(self.manual_target_ra_dec.get().split(' ')[1])
                     )
-                    nearest = plc.simbad_search_by_coordinates(target.ra, target.dec, radius=plc.Degrees(0.25))
+                    nearest = exoclock.simbad_search_by_coordinates(target.ra, target.dec,
+                                                                    radius=exoclock.Degrees(0.25))
+                    nearest._notes = ''
+                    if len(nearest.all_names) > 0:
+                        test = list(set(nearest.all_names).intersection(list(exoclock.exoclock_data.ecc()['hosts'])))
+                        if len(test) > 0:
+                            nearest._notes = '/ Host of: ' + ', '.join(exoclock.exoclock_data.ecc()['hosts'][test[0]])
+
                     self.target_ra_dec_2.set(nearest.coord())
                     if nearest._notes:
                         self.target_name_2.set(nearest.name + ' ' + nearest._notes)
@@ -716,8 +745,8 @@ class DataTargetWindow(MainWindow):
 
         try:
 
-            _ = plc.FixedTarget(plc.Hours(self.target_ra_dec.get().split(' ')[0]),
-                                     plc.Degrees(self.target_ra_dec.get().split(' ')[1]))
+            _ = exoclock.FixedTarget(exoclock.Hours(self.target_ra_dec.get().split(' ')[0]),
+                                     exoclock.Degrees(self.target_ra_dec.get().split(' ')[1]))
             self.target_ra_dec_test.set('   OK   ')
 
         except:
@@ -746,12 +775,12 @@ class DataTargetWindow(MainWindow):
         if lat and long:
             try:
                 if isinstance(lat, str):
-                    observatory = plc.Observatory(plc.Degrees(lat.replace(',', '.')),
-                                                  plc.Degrees(long.replace(',', '.')))
+                    observatory = exoclock.Observatory(exoclock.Degrees(lat.replace(',', '.')),
+                                                  exoclock.Degrees(long.replace(',', '.')))
                     self.auto_location.set(observatory.coord())
                     self.location_choice_0['state'] = self.NORMAL
                 elif isinstance(lat, float):
-                    observatory = plc.Observatory(plc.Degrees(lat), plc.Degrees(long))
+                    observatory = exoclock.Observatory(exoclock.Degrees(lat), exoclock.Degrees(long))
                     self.auto_location.set(observatory.coord())
                     self.location_choice_0['state'] = self.NORMAL
             except:
@@ -760,8 +789,8 @@ class DataTargetWindow(MainWindow):
         self.profile_location.set('Not found')
         self.location_choice_1['state'] = self.DISABLED
         try:
-            observatory = plc.Observatory(plc.Degrees(self.log.get_param('observatory_lat')),
-                                          plc.Degrees(self.log.get_param('observatory_long')))
+            observatory = exoclock.Observatory(exoclock.Degrees(self.log.get_param('observatory_lat')),
+                                          exoclock.Degrees(self.log.get_param('observatory_long')))
             self.profile_location.set(observatory.coord())
             self.location_choice_1['state'] = self.NORMAL
         except:
@@ -791,8 +820,8 @@ class DataTargetWindow(MainWindow):
 
         try:
 
-            observatory = plc.Observatory(plc.Degrees(self.location.get().split(' ')[0]),
-                                          plc.Degrees(self.location.get().split(' ')[1]))
+            _ = exoclock.Observatory(exoclock.Degrees(self.location.get().split(' ')[0]),
+                                          exoclock.Degrees(self.location.get().split(' ')[1]))
             self.location_test.set('   OK   ')
 
         except:
@@ -921,8 +950,14 @@ class DataTargetWindow(MainWindow):
             self.save_and_proceed_button.activate()
 
         else:
+
             self.save_and_return_button.disable()
             self.save_and_proceed_button.disable()
+
+        if self.science_files == 0:
+            self.show_advanced_settings_button.disable()
+        else:
+            self.show_advanced_settings_button.activate()
 
     def crop_to_selected_area(self):
 

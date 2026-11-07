@@ -1,8 +1,9 @@
-
 import os
 import glob
 import numpy as np
 import shutil
+import exoclock
+import traceback
 import matplotlib.image as mpimg
 import matplotlib.gridspec as gridspec
 import hops.pylightcurve41 as plc
@@ -27,6 +28,7 @@ filter_map = {'Clear': 'clear',
               'g\'': 'sdss_g',
               'r\'': 'sdss_r',
               'z\'': 'sdss_z',
+              'i\'': 'sdss_i',
               }
 
 __location__ = os.path.abspath(os.path.dirname(__file__))
@@ -43,21 +45,18 @@ class FittingWindow(MainWindow):
 
         # data
 
-        self.all_frames = plc.open_dict(self.log.all_frames)
+        self.all_frames = plc.open_dict(self.log.all_frames_path)
         self.science_files = []
-        self.exposure_time = []
         for science_file in self.all_frames:
             if not self.all_frames[science_file][self.log.skip_key]:
-                self.science_files.append(science_file)
-                self.exposure_time.append(self.all_frames[science_file][self.log.get_param('exposure_time_key')])
-
-        self.exposure_time = np.median(self.exposure_time)
-        self.science_files.sort()
+                self.science_files.append([science_file, self.all_frames[science_file][self.log.time_key]])
 
         # main window
 
-        photometry_files = (glob.glob(os.path.join('{0}*'.format(self.log.photometry_directory_base), self.log.light_curve_aperture_file)) +
-                            glob.glob(os.path.join('{0}*'.format(self.log.photometry_directory_base), self.log.light_curve_gauss_file)))
+        photometry_files = (glob.glob(
+            os.path.join('{0}*'.format(self.log.photometry_directory_base), self.log.light_curve_aperture_file)) +
+                            glob.glob(os.path.join('{0}*'.format(self.log.photometry_directory_base),
+                                                   self.log.light_curve_gauss_file)))
         photometry_files_sort = []
         for ff in photometry_files:
             folder = os.path.split(ff)[0]
@@ -65,51 +64,68 @@ class FittingWindow(MainWindow):
                 num = 1
             else:
                 num = int(folder.split('_')[1])
-            
+
             photometry_files_sort.append([num, ff])
-        
+
         photometry_files_sort.sort()
-        
+
         photometry_files = [ff[1] for ff in photometry_files_sort]
         photometry_files = ['Choose Light-curve file'] + photometry_files
 
         if self.log.get_param('light_curve_file') not in photometry_files:
             self.log.set_param('light_curve_file', 'Choose Light-curve file')
-        
-        self.light_curve_file = self.DropDown(initial=self.log.get_param('light_curve_file'),
-                                              instance=str,
-                                              options=photometry_files,
-                                              width=40, command=self.update_lc)
+
+        self.light_curve_file = self.DropDown(
+            initial=self.log.get_param('light_curve_file'), instance=str, options=photometry_files, width=40,
+            commands=[self.update_lc])
 
         self.iterations = self.Entry(value=self.log.get_param('iterations'), instance=int)
         self.burn = self.Entry(value=self.log.get_param('burn'), instance=int)
-        self.a_i_fit = self.CheckButton(initial=self.log.get_param('a_i_fit'), text='Fit for a/Rs, i.',
-                                        command=self.update_planet)
-        self.detrending = self.DropDown(initial=self.log.get_param('detrending'),
-                                        options=['Airmass', 'Quadratic', 'Linear'],
-                                        instance=str, command=self.update_planet)
-        self.manual_planet = self.CheckButton(initial=self.log.get_param('manual_planet'),
-                                              text='Enter param. manually', command=self.update_planet)
+        self.a_i_fit = self.CheckButton(
+            initial=self.log.get_param('a_i_fit'), text='Fit for a/Rs, i.', commands=[self.update_planet]
+        )
+        self.detrending = self.DropDown(
+            initial=self.log.get_param('detrending'), options=['Airmass', 'Quadratic', 'Linear'], instance=str,
+            commands=[self.update_planet]
+        )
+        self.manual_planet = self.CheckButton(
+            initial=self.log.get_param('manual_planet'), text='Enter param. manually', commands=[self.update_planet]
+        )
 
-        self.planet = self.Entry(value=self.log.get_param('planet'), command=self.update_planet)
-        self.target_ra_dec = self.Entry(value=self.log.get_param('target_ra_dec'), command=self.update_planet)
-        self.metallicity = self.Entry(value=self.log.get_param('metallicity'), instance=float, command=self.update_planet)
-        self.temperature = self.Entry(value=self.log.get_param('temperature'), instance=float, command=self.update_planet)
-        self.logg = self.Entry(value=self.log.get_param('logg'), instance=float, command=self.update_planet)
-        self.period = self.Entry(value=self.log.get_param('period'), instance=float, command=self.update_planet)
-        self.mid_time = self.Entry(value=self.log.get_param('mid_time'), instance=float, command=self.update_planet)
-        self.rp_over_rs = self.Entry(value=self.log.get_param('rp_over_rs'), instance=float, command=self.update_planet)
-        self.sma_over_rs = self.Entry(value=self.log.get_param('sma_over_rs'), instance=float, command=self.update_planet)
-        self.inclination = self.Entry(value=self.log.get_param('inclination'), instance=float, command=self.update_planet)
-        self.eccentricity = self.Entry(value=self.log.get_param('eccentricity'), instance=float, command=self.update_planet)
-        self.periastron = self.Entry(value=self.log.get_param('periastron'), instance=float, command=self.update_planet)
+        self.planet = self.Entry(value=self.log.get_param('planet'), commands=[self.update_planet])
+        self.target_ra_dec = self.Entry(value=self.log.get_param('target_ra_dec'), commands=[self.update_planet])
+        self.metallicity = self.Entry(
+            value=self.log.get_param('metallicity'), instance=float, commands=[self.update_planet]
+        )
+        self.temperature = self.Entry(
+            value=self.log.get_param('temperature'), instance=float, commands=[self.update_planet]
+        )
+        self.logg = self.Entry(value=self.log.get_param('logg'), instance=float, commands=[self.update_planet])
+        self.period = self.Entry(value=self.log.get_param('period'), instance=float, commands=[self.update_planet])
+        self.mid_time = self.Entry(value=self.log.get_param('mid_time'), instance=float, commands=[self.update_planet])
+        self.rp_over_rs = self.Entry(
+            value=self.log.get_param('rp_over_rs'), instance=float, commands=[self.update_planet]
+        )
+        self.sma_over_rs = self.Entry(
+            value=self.log.get_param('sma_over_rs'), instance=float, commands=[self.update_planet]
+        )
+        self.inclination = self.Entry(
+            value=self.log.get_param('inclination'), instance=float, commands=[self.update_planet]
+        )
+        self.eccentricity = self.Entry(
+            value=self.log.get_param('eccentricity'), instance=float, commands=[self.update_planet]
+        )
+        self.periastron = self.Entry(
+            value=self.log.get_param('periastron'), instance=float, commands=[self.update_planet]
+        )
 
         try:
             ra_target, dec_target = self.log.get_param('target_ra_dec').split(' ')
-            planet = plc.locate_planet(plc.Hours(ra_target), plc.Degrees(dec_target))
-            ecc_data = planet.all_data
-            self.auto_planet = self.Label(text=planet.name)
-            self.auto_target_ra_dec = self.Label(text='{0} {1}'.format(ecc_data['star']['ra'], ecc_data['star']['dec']))
+            ecc_data = exoclock.locate_planet(exoclock.Hours(ra_target), exoclock.Degrees(dec_target))
+            self.auto_planet = self.Label(text=ecc_data['name'])
+            self.auto_target_ra_dec = self.Label(
+                text='{0} {1}'.format(ecc_data['star']['ra'], ecc_data['star']['dec'])
+            )
             self.auto_metallicity = self.Label(text=ecc_data['planet']['meta'], instance=float)
             self.auto_temperature = self.Label(text=ecc_data['planet']['teff'], instance=float)
             self.auto_logg = self.Label(text=ecc_data['planet']['logg'], instance=float)
@@ -151,13 +167,17 @@ class FittingWindow(MainWindow):
 
         # set progress variables, useful for updating the window
 
-        self.test_button = self.Button(text='RUN TEST', command=[self.disable, self.run_test],
-                                          bg='green', highlightbackground='green')
-        self.fitting_button = self.Button(text='RUN FITTING',
-                                          command=[self.disable, self.save_settings, self.run_fitting, self.activate],
-                                          bg='green', highlightbackground='green')
+        self.test_button = self.Button(
+            text='RUN TEST', commands=[self.disable, self.run_test], bg='green', highlightbackground='green'
+        )
+        self.fitting_button = self.Button(
+            text='RUN FITTING', commands=[self.disable, self.save_settings, self.run_fitting, self.activate],
+            bg='green', highlightbackground='green'
+        )
 
-        self.export_button = self.Button(text='EXPORT FOR DATABASES (ExoClock / ETD)', command=self.export_window.show)
+        self.export_button = self.Button(
+            text='EXPORT FOR DATABASES (ExoClock / ETD)', commands=[self.export_window.show]
+        )
 
         # define preview window
 
@@ -166,7 +186,7 @@ class FittingWindow(MainWindow):
         frow = 5
         fbottom = 0.11
         fright = 0.02
-        self.fssmall = 9
+        self.fssmall = 7
         self.fsmain = 9
         self.fsbig = 20
         self.preview_figure = self.FigureWindow(figsize=(6, 7), show_nav=True)
@@ -186,14 +206,17 @@ class FittingWindow(MainWindow):
 
         self.ax1 = self.preview_figure.figure.add_subplot(gs[1:4, 1:])
         self.ax2 = self.preview_figure.figure.add_subplot(gs[4, 1:])
-        self.preview_figure.figure.text(0.04, fbottom + 2.5 * (1 - fbottom) / frow, 'Relative flux (norm)', fontsize=self.fsmain, va='center',
-                 ha='center', rotation='vertical')
-        self.preview_figure.figure.text(0.04, fbottom + 0.5 * (1 - fbottom) / frow, 'Residuals (norm)', fontsize=self.fsmain, va='center',
-                 ha='center', rotation='vertical')
+        self.preview_figure.figure.text(0.04, fbottom + 2.5 * (1 - fbottom) / frow, 'Relative flux (norm)',
+                                        fontsize=self.fsmain, va='center',
+                                        ha='center', rotation='vertical')
+        self.preview_figure.figure.text(0.04, fbottom + 0.5 * (1 - fbottom) / frow, 'Residuals (norm)',
+                                        fontsize=self.fsmain, va='center',
+                                        ha='center', rotation='vertical')
 
         self.title1 = self.preview_figure.figure.text(0.5, 0.94, '', fontsize=self.fsbig, va='center', ha='center')
         self.title2 = self.preview_figure.figure.text(0.97, 0.97, '', fontsize=self.fsmain, va='top', ha='right')
-        self.title3 = self.preview_figure.figure.text(0.03 + (1 - fright) / fcol, 1 - (1 - fbottom) / frow, '', fontsize=self.fsmain, ha='left', va='bottom')
+        self.title3 = self.preview_figure.figure.text(0.03 + (1 - fright) / fcol, 1 - (1 - fbottom) / frow, '',
+                                                      fontsize=self.fsmain, ha='left', va='bottom')
         self.dblclick = False
 
         self.setup_window([
@@ -206,7 +229,8 @@ class FittingWindow(MainWindow):
 
             [[self.Label(text='Planet'), 1], [self.auto_planet, 2], [self.planet, 3]],
 
-            [[self.Label(text='Planet RA DEC\n(hh:mm:ss +/-dd:mm:ss)'), 1], [self.auto_target_ra_dec, 2], [self.target_ra_dec, 3]],
+            [[self.Label(text='Planet RA DEC\n(hh:mm:ss +/-dd:mm:ss)'), 1], [self.auto_target_ra_dec, 2],
+             [self.target_ra_dec, 3]],
 
             [[self.Label(text='Period [days]'), 1], [self.auto_period, 2], [self.period, 3]],
 
@@ -233,23 +257,22 @@ class FittingWindow(MainWindow):
             [[self.Label(text='Iterations (def=5000)'), 1], [self.iterations, 2], [self.detrending, 3]],
             [[self.Label(text='Burn-in (def=1000)'), 1], [self.burn, 2], [self.a_i_fit, 3]],
 
-            [[self.Button(text='RETURN TO\nMAIN MENU', command=self.close), 1],
-             [self.Button(text='SAVE OPTIONS &\nRETURN TO MAIN MENU', command=[self.save_settings, self.close]), 2],
-             [self.Button(text='RETURN TO\nPHOTOMETRY', command=self.return_to_photometry), 3]
+            [[self.Button(text='RETURN TO\nMAIN MENU', commands=[self.close]), 1],
+             [self.Button(text='SAVE OPTIONS &\nRETURN TO MAIN MENU', commands=[self.save_settings, self.close]), 2],
+             [self.Button(text='RETURN TO\nPHOTOMETRY', commands=[self.return_to_photometry]), 3]
              ],
-            [[self.test_button, 1],[self.fitting_button, 2]],
+            [[self.test_button, 1], [self.fitting_button, 2]],
             [],
 
         ])
 
-        self.update_lc()
-        self.update_planet()
-
         # extra windows
 
-        self.export_window_database = self.export_window.DropDown(initial='ExoClock', options=['ExoClock', 'ETD'],
-                                                                  instance=str,
-                                                                  command=self.export_window_update)
+        self.exptime_label = 'None'
+
+        self.export_window_database = self.export_window.DropDown(
+            initial='ExoClock', options=['ExoClock', 'ETD'], instance=str, commands=[self.export_window_update]
+        )
         self.export_window_camera_gain = self.export_window.Entry(value='1', instance=float)
         self.export_window_time_shift = 0
         self.export_window_message = self.export_window.Label(text=' ')
@@ -264,10 +287,12 @@ class FittingWindow(MainWindow):
             [],
             [[self.export_window_message, 0]],
             [],
-            [[self.export_window.Button(text='EXPORT', command=self.export), 0]],
+            [[self.export_window.Button(text='EXPORT', commands=[self.export]), 0]],
             []
         ])
 
+        self.update_planet()
+        self.update_lc()
         self.export_window_update()
 
     def update_lc(self, *entry):
@@ -346,23 +371,35 @@ class FittingWindow(MainWindow):
 
             light_curve = np.loadtxt(self.light_curve_file.get(), unpack=True)
 
+            median_exptime = round(np.median(light_curve[3]), 2)
+
+            if np.sum([round(abs(round(ff, 2) - median_exptime), 2) for ff in light_curve[3]]):
+                self.exptime_label = 'Non-uniform'
+            else:
+                self.exptime_label = str(median_exptime) + 's'
+
+            light_curve[2] = np.abs(light_curve[2])
+
             self.ax1.cla()
             self.ax2.cla()
-            self.plot_data = self.ax1.errorbar(light_curve[0], light_curve[1], light_curve[2], c='k', fmt='o', ms=2, lw=0.5, zorder=0)
+            self.plot_data = self.ax1.errorbar(light_curve[0], light_curve[1], light_curve[2], c='k', fmt='o', ms=2,
+                                               lw=0.5, zorder=0)
             self.plot_data = self.plot_data.lines[0].get_xdata()
 
-            date = plc.JD(light_curve[0][0]).utc.isoformat()[:16].replace('T', ' ')
-            self.observation_date = plc.JD(light_curve[0][0]).utc.isoformat()[:16].split('T')[0]
+            self.observation_date = exoclock.Moment(jd_utc=light_curve[0][0]).utc().isoformat()[:16].replace('T', ' ')
             obs_duration = round(24 * (light_curve[0][-1] - light_curve[0][0]), 1)
 
-            self.title2.set_text('{0} (UT)\nDur: {1}h / Exp: {2}s\nFilter: {3}'.format(date, obs_duration, self.exposure_time,
-                                                                                       self.log.get_param('filter')))
+            self.title2.set_text('{0} (UT)\nDur: {1}h / Exp: {2}\nFilter: {3}'.format(
+                self.observation_date, obs_duration, self.exptime_label, self.log.get_param('filter')))
             self.title3.set_text(
                 '\n\n{0}\n{1}'.format(
                     self.log.get_param('observer'), '{0} / {1} / {2}'.format(
-                        self.log.get_param('observatory'), self.log.get_param('telescope'), self.log.get_param('camera'))))
+                        self.log.get_param('observatory'), self.log.get_param('telescope'),
+                        self.log.get_param('camera'))))
 
             self.preview_figure.draw(update_level=2)
+
+            self.export_window_update()
 
     def update_planet(self, *entry):
 
@@ -385,7 +422,7 @@ class FittingWindow(MainWindow):
             self.inclination.activate()
             self.periastron.activate()
 
-            self.title1.set_text('{0}{1}{2}'.format('$\mathbf{', self.planet.get(), '}$'))
+            self.title1.set_text(r'{0}{1}{2}'.format(r'$\mathbf{', self.planet.get(), '}$'))
 
         else:
             self.planet.disable()
@@ -401,7 +438,7 @@ class FittingWindow(MainWindow):
             self.inclination.disable()
             self.periastron.disable()
 
-            self.title1.set_text('{0}{1}{2}'.format('$\mathbf{', self.auto_planet.get(), '}$'))
+            self.title1.set_text(r'{0}{1}{2}'.format(r'$\mathbf{', self.auto_planet.get(), '}$'))
 
         self.preview_figure.draw()
 
@@ -440,6 +477,8 @@ class FittingWindow(MainWindow):
                 self.periastron.disable()
 
         except Exception as e:
+            traceback.print_exc()
+
             if self.log.get_param('location') == '+dd:mm:ss +dd:mm:ss':
                 self.showinfo('Test failed', 'Test failed! Please update the location of your telescope '
                                              'in the SELECT DATA & TARGET window.')
@@ -454,114 +493,128 @@ class FittingWindow(MainWindow):
 
     def run_fitting(self):
 
-        planet, fitting = self.call_plc_fitting(optimiser='emcee')
+        fitting_directory = '.'.join(
+            self.light_curve_file.get().split('.')[:-1]) + '_' + self.log.fitting_directory_base
 
-        if fitting.mcmc_run_complete:
+        if not os.path.isdir(fitting_directory):
+            os.mkdir(fitting_directory)
+        else:
+            fi = 2
+            while os.path.isdir('{0}_{1}'.format(fitting_directory, str(fi))):
+                fi += 1
+            fitting_directory = '{0}_{1}'.format(fitting_directory, str(fi))
+            os.mkdir(fitting_directory)
 
-            fitting_directory = '.'.join(self.light_curve_file.get().split('.')[:-1]) + '_' + self.log.fitting_directory_base
+        try:
+            planet, fitting = self.call_plc_fitting('emcee', fitting_directory)
 
-            if not os.path.isdir(fitting_directory):
-                os.mkdir(fitting_directory)
-            else:
-                fi = 2
-                while os.path.isdir('{0}_{1}'.format(fitting_directory, str(fi))):
-                    fi += 1
-                fitting_directory = '{0}_{1}'.format(fitting_directory, str(fi))
-                os.mkdir(fitting_directory)
+            if fitting['mcmc_run_complete']:
 
-            # saving
+                # saving
 
-            shutil.copy(self.log.files['fitting_output_description'], fitting_directory)
+                shutil.copy(self.log.files['fitting_output_description'], fitting_directory)
 
-            fitting.save_results(os.path.join(fitting_directory, 'results.txt'))
-            fitting.plot_corner(os.path.join(fitting_directory, 'corner.pdf'))
-            fitting.plot_traces(os.path.join(fitting_directory, 'traces.pdf'))
+                shutil.move(os.path.join(fitting_directory, 'global_correlations.pdf'),
+                            os.path.join(fitting_directory, 'corner.pdf'))
+                shutil.move(os.path.join(fitting_directory, 'global_traces.pdf'),
+                            os.path.join(fitting_directory, 'traces.pdf'))
+                shutil.move(os.path.join(fitting_directory, 'obs0_results.txt'),
+                            os.path.join(fitting_directory, 'results.txt'))
 
-            np.savetxt(
-                os.path.join(fitting_directory, 'model.txt'),
-                np.swapaxes(
-                    [
-                        fitting.results['input_series']['time'],
-                        (fitting.results['input_series']['time'] - fitting.results['parameters']['T_mid']['value'])/fitting.results['parameters']['P']['value'],
-                        fitting.results['input_series']['flux'],
-                        fitting.results['input_series']['flux_unc'],
-                        fitting.results['output_series']['model'],
-                        fitting.results['output_series']['residuals'],
+                os.remove(os.path.join(fitting_directory, 'global_results.pickle'))
+                os.remove(os.path.join(fitting_directory, 'global_results.txt'))
+                os.remove(os.path.join(fitting_directory, 'obs0_results.pickle'))
+                os.remove(os.path.join(fitting_directory, 'obs0_lightcurve.pdf'))
+
+                np.savetxt(
+                    os.path.join(fitting_directory, 'model.txt'),
+                    np.swapaxes(
+                        [
+                            fitting['input_series']['time'],
+                            (fitting['input_series']['time'] - fitting['parameters']['mid_time']['value']) /
+                            fitting['parameters']['period']['value'],
+                            fitting['input_series']['flux'],
+                            fitting['input_series']['flux_unc'],
+                            fitting['output_series']['model'],
+                            fitting['output_series']['residuals'],
                         ], 0, 1
+                    )
                 )
-            )
 
-            np.savetxt(
-                os.path.join(fitting_directory, 'detrended_model.txt'),
-                np.swapaxes(
-                    [
-                        fitting.results['input_series']['time'],
-                        (fitting.results['input_series']['time'] - fitting.results['parameters']['T_mid']['value'])/fitting.results['parameters']['P']['value'],
-                        fitting.results['detrended_input_series']['flux'],
-                        fitting.results['detrended_input_series']['flux_unc'],
-                        fitting.results['detrended_output_series']['model'],
-                        fitting.results['detrended_output_series']['residuals'],
+                np.savetxt(
+                    os.path.join(fitting_directory, 'detrended_model.txt'),
+                    np.swapaxes(
+                        [
+                            fitting['input_series']['time'],
+                            (fitting['input_series']['time'] - fitting['parameters']['mid_time']['value']) /
+                            fitting['parameters']['period']['value'],
+                            fitting['detrended_series']['flux'],
+                            fitting['detrended_series']['flux_unc'],
+                            fitting['detrended_series']['model'],
+                            fitting['detrended_series']['residuals'],
                         ], 0, 1
+                    )
                 )
-            )
 
-            w = open(os.path.join(fitting_directory, 'results.txt'), 'a')
+                funit = 0.8
+                fcol = 7
+                frow = 5
+                fbottom = 0.11
+                fright = 0.02
+                fssmall = 8
+                fsmain = 10
+                fsbig = 20
+                figure = Figure(figsize=(funit * fcol / (1 - fright), funit * frow / (1 - fbottom)))
+                try:
+                    gs = gridspec.GridSpec(frow, fcol, figure, 0.03, fbottom, 1.0 - fright, 1.0, 0.0, 0.0)
+                except TypeError:
+                    gs = gridspec.GridSpec(frow, fcol, 0.03, fbottom, 1.0 - fright, 1.0, 0.0, 0.0)
 
-            w.write('\n\n#Detrended Residuals:\n')
-            w.write('#Mean: {0}\n'.format(fitting.results['detrended_statistics']['res_mean']))
-            w.write('#STD: {0}\n'.format(fitting.results['detrended_statistics']['res_std']))
-            w.write('#RMS: {0}\n'.format(fitting.results['detrended_statistics']['res_rms']))
+                logo_ax = figure.add_subplot(gs[0, 0])
+                logo_ax.imshow(mpimg.imread(self.log.files['holomon_logo']))
+                logo_ax.spines['top'].set_visible(False)
+                logo_ax.spines['bottom'].set_visible(False)
+                logo_ax.spines['left'].set_visible(False)
+                logo_ax.spines['right'].set_visible(False)
+                logo_ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
 
-            w.close()
+                ax1 = figure.add_subplot(gs[1:4, 1:])
+                ax2 = figure.add_subplot(gs[4, 1:])
+                figure.text(0.04, fbottom + 2.5 * (1 - fbottom) / frow, 'Relative flux (norm)', fontsize=fsmain,
+                            va='center',
+                            ha='center', rotation='vertical')
+                figure.text(0.04, fbottom + 0.5 * (1 - fbottom) / frow, 'Residuals (norm)', fontsize=fsmain,
+                            va='center',
+                            ha='center', rotation='vertical')
 
-            funit = 0.8
-            fcol = 7
-            frow = 5
-            fbottom = 0.11
-            fright = 0.02
-            fssmall = 8
-            fsmain = 10
-            fsbig = 20
-            figure = Figure(figsize=(funit * fcol / (1 - fright), funit * frow / (1 - fbottom)))
-            try:
-                gs = gridspec.GridSpec(frow, fcol, figure, 0.03, fbottom, 1.0 - fright, 1.0, 0.0, 0.0)
-            except TypeError:
-                gs = gridspec.GridSpec(frow, fcol, 0.03, fbottom, 1.0 - fright, 1.0, 0.0, 0.0)
+                title1 = figure.text(0.5, 0.94, '', fontsize=self.fsbig, va='center', ha='center')
+                title2 = figure.text(0.97, 0.97, '', fontsize=self.fsmain, va='top', ha='right')
+                title3 = figure.text(0.03 + (1 - fright) / fcol, 1 - (1 - fbottom) / frow, '', fontsize=self.fsmain,
+                                     ha='left', va='bottom')
 
-            logo_ax = figure.add_subplot(gs[0, 0])
-            logo_ax.imshow(mpimg.imread(self.log.files['holomon_logo']))
-            logo_ax.spines['top'].set_visible(False)
-            logo_ax.spines['bottom'].set_visible(False)
-            logo_ax.spines['left'].set_visible(False)
-            logo_ax.spines['right'].set_visible(False)
-            logo_ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+                self.plot_results_to_axes(planet, fitting, ax1, ax2, title1, title2, title3, 'De-trended')
 
-            ax1 = figure.add_subplot(gs[1:4, 1:])
-            ax2 = figure.add_subplot(gs[4, 1:])
-            figure.text(0.04, fbottom + 2.5 * (1 - fbottom) / frow, 'Relative flux (norm)', fontsize=fsmain, va='center',
-                        ha='center', rotation='vertical')
-            figure.text(0.04, fbottom + 0.5 * (1 - fbottom) / frow, 'Residuals (norm)', fontsize=fsmain, va='center',
-                        ha='center', rotation='vertical')
+                figure.savefig(os.path.join(fitting_directory, 'detrended_model.jpg'), dpi=1200, transparent=False)
 
-            title1 = figure.text(0.5, 0.94, '', fontsize=self.fsbig, va='center', ha='center')
-            title2 = figure.text(0.97, 0.97, '', fontsize=self.fsmain, va='top', ha='right')
-            title3 = figure.text(0.03 + (1 - fright) / fcol, 1 - (1 - fbottom) / frow, '', fontsize=self.fsmain, ha='left', va='bottom')
+                self.log.set_param('fitting_complete', True)
+                self.log.set_param('fitting_version', self.log.version)
 
-            self.plot_results_to_axes(planet, fitting, ax1, ax2, title1, title2, title3, 'De-trended')
+                self.log.save_local_log()
 
-            figure.savefig(os.path.join(fitting_directory, 'detrended_model.jpg'), dpi=1200, transparent=False)
+                self.log.export_local_log(fitting_directory)
 
-            self.log.set_param('fitting_complete', True)
-            self.log.set_param('fitting_version', self.log.version)
+                self.showinfo('Results saved successfully',
+                              'Your results have been saved successfully in {0}'.format(fitting_directory))
 
-            self.log.save_local_log()
+        except:
 
-            self.log.export_local_log(fitting_directory)
+            shutil.rmtree(fitting_directory)
 
-            self.showinfo('Results saved successfully',
-                          'Your results have been saved successfully in {0}'.format(fitting_directory))
+            import traceback
+            print(f'{traceback.format_exc()}')
+            self.activate()
 
-    def call_plc_fitting(self, optimiser):
+    def call_plc_fitting(self, optimiser, output_folder=None):
 
         if self.manual_planet.get():
             target_ra_dec_to_plot = self.target_ra_dec.get()
@@ -596,159 +649,180 @@ class FittingWindow(MainWindow):
         light_curve = np.loadtxt(self.light_curve_file.get(), unpack=True)
 
         location_string = self.log.get_param('location').split(' ')
-        observatory = plc.Observatory(plc.Degrees(location_string[0]), plc.Degrees(location_string[1]))
+        observatory = exoclock.Observatory(exoclock.Degrees(location_string[0]), exoclock.Degrees(location_string[1]))
 
         ra_dec_string = target_ra_dec_to_plot.split(' ')
         planet = plc.Planet(
-            planet_to_plot, plc.Hours(ra_dec_string[0]), plc.Degrees(ra_dec_string[1]),
+            planet_to_plot, exoclock.Hours(ra_dec_string[0]).deg(), exoclock.Degrees(ra_dec_string[1]).deg_coord(),
             logg_to_plot, temperature_to_plot, metallicity_to_plot,
             rp_over_rs_to_plot, period_to_plot, sma_over_rs_to_plot, eccentricity_to_plot, inclination_to_plot,
-            periastron_to_plot, mid_time_to_plot, 'BJD_TDB')
+            periastron_to_plot, mid_time_to_plot)
+
+        if self.detrending.get() == 'Airmass':
+            detrending_series = 'airmass'
+            detrending_order = 1
+        elif self.detrending.get() == 'Linear':
+            detrending_series = 'time'
+            detrending_order = 1
+        else:
+            detrending_series = 'time'
+            detrending_order = 2
 
         planet.add_observation(
-            time=light_curve[0],
+            time=light_curve[0] + light_curve[3] / 24 / 60 / 60 / 2,
             time_format='JD_UTC',
-            exp_time=float(self.exposure_time),
-            time_stamp='start',
+            exp_time=np.mean(light_curve[3]),
+            time_stamp='mid',
             flux=light_curve[1],
             flux_unc=light_curve[2],
             flux_format='flux',
             filter_name=filter_map[self.log.get_param('filter')],
-            observatory_latitude=observatory.latitude,
-            observatory_longitude=observatory.longitude,
+            observatory_latitude=observatory.latitude.deg_coord(),
+            observatory_longitude=observatory.longitude.deg(),
+            detrending_series=detrending_series,
+            detrending_order=detrending_order
         )
 
         if self.a_i_fit.get():
-            fit_sma_over_rs=True
-            fit_inclination=True
+            fit_sma_over_rs = True
+            fit_inclination = True
         else:
-            fit_sma_over_rs=False
-            fit_inclination=False
-
-        if self.detrending.get() == 'Airmass':
-            detrending = 'airmass'
-            detrending_order = 1
-        elif self.detrending.get() == 'Linear':
-            detrending = 'time'
-            detrending_order = 1
-        else:
-            detrending = 'time'
-            detrending_order = 2
+            fit_sma_over_rs = False
+            fit_inclination = False
 
         return planet, planet.transit_fitting(
-            detrending_order=detrending_order, detrending=detrending,
-            optimise_initial_parameters=True, scale_uncertainties=True, filter_outliers=True,
+            output_folder=output_folder,
+            scale_uncertainties=True, filter_outliers=True,
             fit_sma_over_rs=fit_sma_over_rs, fit_inclination=fit_inclination,
             counter=None, window_counter=True,
             iterations=self.iterations.get(), burn_in=self.burn.get(),
-            optimiser=optimiser,
+            optimiser=optimiser
         )
 
-    def plot_results_to_axes(self, planet, fitting, ax1, ax2, title1, title2, title3, lc_type):
+    def plot_results_to_axes(self, planet, fitting_results, ax1, ax2, title1, title2, title3, lc_type):
 
         light_curve = np.loadtxt(self.light_curve_file.get(), unpack=True)
-        date = plc.JD(light_curve[0][0]).utc.isoformat()[:16].replace('T', ' ')
+        date = exoclock.Moment(jd_utc=light_curve[0][0]).utc().isoformat()[:16].replace('T', ' ')
         obs_duration = round(24 * (light_curve[0][-1] - light_curve[0][0]), 1)
 
-        title1.set_text('{0}{1}{2}'.format('$\mathbf{', planet.name, '}$'))
+        title1.set_text(r'{0}{1}{2}'.format(r'$\mathbf{', planet.name, '}$'))
 
-        title2.set_text('{0} (UT)\nDur: {1}h / Exp: {2}s\nFilter: {3}'.format(date, obs_duration, self.exposure_time,
-                                                                                   self.log.get_param('filter')))
+        title2.set_text('{0} (UT)\nDur: {1}h / Exp: {2}\nFilter: {3}'.format(
+            date, obs_duration, self.exptime_label, self.log.get_param('filter'))
+        )
         title3.set_text(
             '\n\n{0}\n{1}'.format(
                 self.log.get_param('observer'), '{0} / {1} / {2}'.format(
                     self.log.get_param('observatory'), self.log.get_param('telescope'), self.log.get_param('camera'))))
 
-        new_mid_time = fitting.results['parameters']['T_mid']['value']
-        time = fitting.results['input_series']['time']
-        phase = (time - new_mid_time)/planet.period
+        ax1.cla()
 
-        epoch = round((new_mid_time-planet.mid_time)/planet.period)
+        new_mid_time = fitting_results['parameters']['mid_time']['value']
+        epoch = round((new_mid_time - planet.mid_time) / planet.period)
         predicted_mid_time = planet.mid_time + epoch * planet.period
         predicted_rp_over_rs = planet.rp_over_rs
 
-        predicted_transit_model = planet.transit_integrated(
-            time, 'BJD_TDB', float(self.exposure_time), 'start', filter_map[self.log.get_param('filter')]
-        )
-
-        ax1.cla()
-
         if lc_type == 'Raw':
-            flux = fitting.results['input_series']['flux']
-            flux_unc = fitting.results['input_series']['flux_unc']
-            model = fitting.results['output_series']['model']
-            detrended_model = fitting.results['detrended_output_series']['model']
-            trend = model / detrended_model
-            std_res = fitting.results['statistics']['res_std']
-        else:
-            flux = fitting.results['detrended_input_series']['flux']
-            flux_unc = fitting.results['detrended_input_series']['flux_unc']
-            model = fitting.results['detrended_output_series']['model']
-            trend = 1
-            std_res = fitting.results['detrended_statistics']['res_std']
 
-        self.plot_data = ax1.errorbar(time, flux, flux_unc, c='k', fmt='o', ms=2, lw=0.5, zorder=0)
-        self.plot_data = self.plot_data.lines[0].get_xdata()
-        ax1.plot(time, flux, 'ko', ms=2, label=lc_type + ' data', zorder=0)
+            non_outliers = fitting_results['observations']['obs0']['data_conversion_info']['non_outliers_map']
+            outliers = [ff for ff in np.arange(len(fitting_results['observations']['obs0']['original_data']['time']))
+                        if ff not in non_outliers]
 
-        if lc_type == 'Raw':
-            ax1.errorbar(
-                fitting.results['settings']['time'][np.where(fitting.results['prefit']['outliers_map'])],
-                fitting.results['settings']['flux'][np.where(fitting.results['prefit']['outliers_map'])],
-                fitting.results['settings']['flux_unc'][np.where(fitting.results['prefit']['outliers_map'])] * fitting.results['prefit']['scale_factor'],
-                c='k', fmt='o', ms=2, lw=0.5, zorder=0)
+            time = fitting_results['observations']['obs0']['original_data']['time']
+            flux = fitting_results['observations']['obs0']['original_data']['flux']
+            flux_unc = fitting_results['observations']['obs0']['original_data']['flux_unc'] * \
+                       fitting_results['observations']['obs0']['data_conversion_info']['scale_factor'],
+
+            best_fit_model_time = time[non_outliers]
+            best_fit_model_flux = fitting_results['output_series']['model']
+
+            predicted_model_time = time[non_outliers]
+            predicted_model_flux = planet.transit_integrated(
+                fitting_results['detrended_series']['time'],
+                np.mean(light_curve[3]), filter_map[self.log.get_param('filter')]
+            ) * (best_fit_model_flux / fitting_results['detrended_series']['model'])
+
+            std_res = fitting_results['statistics']['res_std']
+
+            label = 'raw data'
+
             ax1.plot(
-                fitting.results['settings']['time'][np.where(fitting.results['prefit']['outliers_map'])],
-                fitting.results['settings']['flux'][np.where(fitting.results['prefit']['outliers_map'])],
-                'rx', ms=7, label='Outliers (not fitted)', zorder=1)
+                time[outliers], flux[outliers], 'rx', ms=7, label='Outliers (not fitted)', zorder=1)
+        else:
+
+            time = fitting_results['detrended_series']['time']
+            flux = fitting_results['detrended_series']['flux']
+            flux_unc = fitting_results['detrended_series']['flux_unc']
+
+            best_fit_model_time = time
+            best_fit_model_flux = fitting_results['detrended_series']['model']
+
+            predicted_model_time = fitting_results['detrended_series']['time']
+            predicted_model_flux = planet.transit_integrated(
+                fitting_results['detrended_series']['time'],
+                np.mean(light_curve[3]), filter_map[self.log.get_param('filter')]
+            )
+
+            std_res = fitting_results['detrended_statistics']['res_std']
+
+            label = 'de-trended data'
+
+        ax1.errorbar(time, flux, flux_unc, c='k', fmt='o', ms=2, lw=0.5, label=label, zorder=0)
 
         data_ymin = min(flux) - 5 * std_res
         data_ymax = max(flux) + 2 * std_res
 
         ax1.set_yticks(ax1.get_yticks()[np.where(ax1.get_yticks() > data_ymin)])
-        ymin, ymax = data_ymax - 1.3 * (data_ymax - data_ymin), data_ymax
+        ymin, ymax = data_ymax - 1.1 * (data_ymax - data_ymin), data_ymax
         ax1.set_ylim(ymin, ymax)
 
         ax1.tick_params(labelbottom=False, labelsize=self.fsmain)
 
-        ax1.plot(time, model, 'r-', label='Best-fit model (De-trending: {11}, a/Rs,i: {12})\n{0}{3}{0}={0}{4}_{1}-{5}{2}^{1}+{6}{2}{0}, {0}{7}{0}={0}{8}_{1}-{9}{2}^{1}+{10}{2}{0}'.format(
-            '$', '{', '}',
-            fitting.results['parameters']['T_mid']['print_name'],
-            fitting.results['parameters']['T_mid']['print_value'],
-            fitting.results['parameters']['T_mid']['print_m_error'],
-            fitting.results['parameters']['T_mid']['print_p_error'],
-            fitting.results['parameters']['rp']['print_name'],
-            fitting.results['parameters']['rp']['print_value'],
-            fitting.results['parameters']['rp']['print_m_error'],
-            fitting.results['parameters']['rp']['print_p_error'],
-            self.detrending.get(),
-            ['Fixed', 'Free'][self.a_i_fit.get()],
-        ),zorder=3)
+        ax1.plot(best_fit_model_time, best_fit_model_flux, 'r-',
+                 label='Best-fit model (De-trending: {11}, a/Rs,i: {12})\n{0}{3}{0}={0}{4}_{1}-{5}{2}^{1}+{6}{2}{0}, '
+                       '{0}{7}{0}={0}{8}_{1}-{9}{2}^{1}+{10}{2}{0}'.format(
+                     '$', '{', '}',
+                     fitting_results['parameters']['mid_time']['print_name'],
+                     fitting_results['parameters']['mid_time']['print_value'],
+                     fitting_results['parameters']['mid_time']['print_m_error'],
+                     fitting_results['parameters']['mid_time']['print_p_error'],
+                     fitting_results['parameters']['rp_over_rs']['print_name'],
+                     fitting_results['parameters']['rp_over_rs']['print_value'],
+                     fitting_results['parameters']['rp_over_rs']['print_m_error'],
+                     fitting_results['parameters']['rp_over_rs']['print_p_error'],
+                     self.detrending.get(),
+                     ['Fixed', 'Free'][self.a_i_fit.get()],
+                 ), zorder=3)
 
-        ax1.plot(time, predicted_transit_model * trend, 'c-', label='Expected model\n{0}{3}{0}={0}{4}{0}, {0}{5}{0}={0}{6}{0}, O-C={0}{7}_{1}-{8}{2}^{1}+{9}{2}{0} min'.format(
-            '$','{', '}',
-            fitting.results['parameters']['T_mid']['print_name'],
-            round(predicted_mid_time, 5),
-            fitting.results['parameters']['rp']['print_name'],
-            round(predicted_rp_over_rs, 5),
-            round((new_mid_time - predicted_mid_time) * 24 * 60, 1),
-            round(fitting.results['parameters']['T_mid']['m_error'] * 24 * 60, 1),
-            round(fitting.results['parameters']['T_mid']['p_error'] * 24 * 60, 1),
-        ), zorder=2)
+        ax1.plot(predicted_model_time, predicted_model_flux, 'c-',
+                 label='Expected model\n{0}{3}{0}={0}{4}{0}, {0}{5}{0}={0}{6}{0}, '
+                       'O-C={0}{7}_{1}-{8}{2}^{1}+{9}{2}{0} min'.format(
+                     '$', '{', '}',
+                     fitting_results['parameters']['mid_time']['print_name'],
+                     round(predicted_mid_time, 5),
+                     fitting_results['parameters']['rp_over_rs']['print_name'],
+                     round(predicted_rp_over_rs, 5),
+                     round((new_mid_time - predicted_mid_time) * 24 * 60, 1),
+                     round(fitting_results['parameters']['mid_time']['m_error'] * 24 * 60, 1),
+                     round(fitting_results['parameters']['mid_time']['p_error'] * 24 * 60, 1),
+                 ), zorder=2)
 
         ax1.legend(loc=3, fontsize=self.fssmall)
 
         ax2.cla()
 
-        detrended_flux_unc = fitting.results['detrended_input_series']['flux_unc']
-        detrended_residuals = fitting.results['detrended_output_series']['residuals']
-        detrended_std_res = fitting.results['detrended_statistics']['res_std']
-        res_autocorr = fitting.results['statistics']['res_max_autocorr']
-        res_autocorr_flag = fitting.results['statistics']['res_max_autocorr_flag']
+        detrended_flux_unc = fitting_results['detrended_series']['flux_unc']
+        detrended_residuals = fitting_results['detrended_series']['residuals']
+        detrended_std_res = fitting_results['detrended_statistics']['res_std']
+        res_autocorr = fitting_results['statistics']['res_max_autocorr']
+        res_autocorr_flag = fitting_results['statistics']['res_max_autocorr_flag']
+        res_shapiro = fitting_results['statistics']['res_shapiro']
+        res_shapiro_flag = fitting_results['statistics']['res_shapiro_flag']
+        phase_res = (predicted_model_time - predicted_mid_time) / planet.period
 
-        ax2.errorbar(time, detrended_residuals,  detrended_flux_unc, c='k', fmt='o', ms=2, lw=0.5)
-        ax2.plot(time, detrended_residuals, 'ko', ms=2)
-        ax2.plot(time, np.zeros_like(time), 'r-')
+        ax2.errorbar(phase_res, detrended_residuals, detrended_flux_unc, c='k', fmt='o', ms=2, lw=0.5)
+        # ax2.plot(phase_res, detrended_residuals, 'ko', ms=2)
+        ax2.plot(phase_res, np.zeros_like(phase_res), 'r-')
 
         ax2.set_ylim(- 6 * detrended_std_res, 6 * detrended_std_res)
 
@@ -758,11 +832,14 @@ class FittingWindow(MainWindow):
 
         ax2.text(ax2.get_xlim()[0] + 0.02 * (ax2.get_xlim()[-1] - ax2.get_xlim()[0]),
                  ax2.get_ylim()[1] - 0.15 * (ax2.get_ylim()[-1] - ax2.get_ylim()[0]),
-                 r'STD = %.2f $‰$' % (detrended_std_res * 1000),
+                 r'STD = %.2f $‰$,' % (detrended_std_res * 1000) +
+                 '    Transit S/N = {0:.2f}'.format(fitting_results['SNR']) +
+                 [' (acceptable)', ' (too low)'][int(fitting_results['SNR'] < 3)],
                  fontsize=self.fssmall)
         ax2.text(ax2.get_xlim()[0] + 0.02 * (ax2.get_xlim()[-1] - ax2.get_xlim()[0]),
                  ax2.get_ylim()[0] + 0.07 * (ax2.get_ylim()[-1] - ax2.get_ylim()[0]),
-                 r'AutoCorr = %.2f' %res_autocorr + [' (acceptable)', ' (too high)'][res_autocorr_flag],
+                 r'AutoCorr = %.4f' % res_autocorr + [' (acceptable),', ' (too high),'][int(res_autocorr_flag)] +
+                 r'   1-Shapiro = %.4f' % (1 - res_shapiro) + [' (acceptable)', ' (too high)'][int(res_shapiro_flag)],
                  fontsize=self.fssmall)
 
     def show_point_info(self, event=None):
@@ -770,8 +847,8 @@ class FittingWindow(MainWindow):
             if event.inaxes:
                 if event.dblclick and not self.dblclick:
                     if event.y > 0.33 * self.preview_figure.canvas.get_tk_widget().winfo_reqheight():
-                        idx = np.argmin((event.xdata - self.plot_data) ** 2)
-                        self.showinfo('Point information', self.science_files[idx])
+                        idx = np.argmin((event.xdata - np.array([ff[1] for ff in self.science_files])) ** 2)
+                        self.showinfo('Point information', self.science_files[idx][0])
                     self.dblclick = True
                 else:
                     self.dblclick = False
@@ -843,11 +920,11 @@ class FittingWindow(MainWindow):
 
         light_curve = np.loadtxt(self.light_curve_file.get(), unpack=True)
 
-        file_name = 'HOPS_{5}_{0}_{1}_{2}_{3}s_for_{4}.txt'.format(
-            self.observation_date,
+        file_name = 'HOPS_{5}_{0}_{1}_{2}_{3}_for_{4}.txt'.format(
+            self.observation_date[:10],
             planet_to_plot,
             self.log.get_param('filter'),
-            self.exposure_time,
+            self.exptime_label,
             self.export_window_database.get(),
             self.light_curve_file.get().replace(os.sep, '_').replace('.txt', '')
         )
@@ -856,11 +933,22 @@ class FittingWindow(MainWindow):
 
         w.write(self.export_window_header)
 
-        for i in range(len(light_curve[0])):
-            w.write('{0:.10f}\t{1:.10f}\t{2:.10f}\n'.format(light_curve[0][i] + self.export_window_time_shift,
-                                             light_curve[1][i],
-                                             light_curve[2][i] * (1 / np.sqrt(self.export_window_camera_gain.get())),
-                                             ))
+        if self.exptime_label == 'Non-uniform':
+
+            for i in range(len(light_curve[0])):
+                w.write('{0:.10f}\t{1:.10f}\t{2:.10f}\t\t{3:.2f}\n'.format(
+                    light_curve[0][i] + self.export_window_time_shift * light_curve[3][i] / 24 / 60 / 60,
+                    light_curve[1][i], light_curve[2][i] * (1 / np.sqrt(self.export_window_camera_gain.get())),
+                    light_curve[3][i]
+                ))
+
+        else:
+
+            for i in range(len(light_curve[0])):
+                w.write('{0:.10f}\t{1:.10f}\t{2:.10f}\n'.format(
+                    light_curve[0][i] + self.export_window_time_shift * light_curve[3][i] / 24 / 60 / 60,
+                    light_curve[1][i], light_curve[2][i] * (1 / np.sqrt(self.export_window_camera_gain.get())),
+                ))
 
         self.showinfo('Export', 'File saved at: ' + file_name)
 
@@ -876,48 +964,62 @@ class FittingWindow(MainWindow):
             self.export_window_camera_gain.set(1.0)
             self.export_window_time_shift = 0
 
-            self.export_window_header = '\n'.join([
+            header_lines = [
                 '#Planet: {0}'.format(planet_to_plot),
                 '#Time format: JD_UTC',
                 '#Time stamp: Exposure start',
                 '#Flux format: Flux',
                 '#Filter: {0}'.format(self.log.get_param('filter')),
-                '#Exposure time in seconds: {0}'.format(self.exposure_time),
-                '#Time                   Flux            Flux uncertainty\n'
-            ])
+                '#Exposure time: {0}'.format(self.exptime_label)
+            ]
+
+            if self.exptime_label == 'Non-uniform':
+                header_lines.append('#Time                   Flux            Flux uncertainty        Exp. time (s)\n')
+            else:
+                header_lines.append('#Time                   Flux            Flux uncertainty\n')
+
+            self.export_window_header = '\n'.join(header_lines)
 
             self.export_window_message.set('No transformation is needed to upload your results to\nExoClock ' \
-                                         '(www.exoclock.space).\n\nWhen uploading you will need to use the following ' \
-                                         'details:\n' \
-                                         'Planet: {0}\n'\
-                                         'Time format: JD_UTC\n'\
-                                         'Time stamp: Exposure start\n'\
-                                         'Flux format: Flux\n'\
-                                         'Filter: {1}\n'\
-                                         'Exposure time in seconds: {2}'.format(planet_to_plot,
-                                                                                self.log.get_param('filter'),
-                                                                                self.exposure_time))
+                                           '(www.exoclock.space).\n\nWhen uploading you will need to use the following ' \
+                                           'details:\n' \
+                                           'Planet: {0}\n' \
+                                           'Time format: JD_UTC\n' \
+                                           'Time stamp: Exposure start\n' \
+                                           'Flux format: Flux\n' \
+                                           'Filter: {1}\n' \
+                                           'Exposure time: {2}'.format(
+                planet_to_plot, self.log.get_param('filter'), self.exptime_label)
+            )
 
         else:
-            self.export_window_time_shift = self.exposure_time / 60 / 60 / 24 / 2
 
-            self.export_window_header = '\n'.join([
+            self.export_window_time_shift = 0.5
+
+            header_lines = [
                 '#Planet: {0}'.format(planet_to_plot),
                 '#Time format: JD_UTC (geocentric)',
                 '#Time stamp: Mid-exposure',
                 '#Flux format: Flux (in flux)',
                 '#Filter: {0}'.format(self.log.get_param('filter')),
-                '#Exposure time in seconds: {0}'.format(self.exposure_time),
-                '#Time                   Flux            Flux uncertainty\n'
-            ])
+                '#Exposure time: {0}'.format(self.exptime_label),
+            ]
 
-            self.export_window_message.set('To upload your results to ETD (var2.astro.cz/ETD)\nthe following modifications ' \
-                                         'are applied:\n\n' \
-                                         '1. Half of the exposure time is added as the time-stamp required on ETD ' \
-                                         'referes to the exposure mid-time\n' \
-                                         '2. The uncertainties are  mupliplied by 1/SQRT(gain) to represent the ' \
-                                         'uncertainies in electrons rather than counts.\n\n'\
-                                         'When uploading you will need to use the following details:\n' \
-                                         'Planet: {0}\n'\
-                                         'JD format: geocentric\n'\
-                                         'Brightness column: in flux'.format(planet_to_plot))
+            if self.exptime_label == 'Non-uniform':
+                header_lines.append('#Time                   Flux            Flux uncertainty        Exp. time (s)\n')
+            else:
+                header_lines.append('#Time                   Flux            Flux uncertainty\n')
+
+            self.export_window_header = '\n'.join(header_lines)
+
+            self.export_window_message.set(
+                'To upload your results to ETD (var2.astro.cz/ETD)\nthe following modifications ' \
+                'are applied:\n\n' \
+                '1. Half of the exposure time is added, as the time-stamp required on ETD ' \
+                'refers to the exposure mid-time\n' \
+                '2. The uncertainties are  multiplied by 1/SQRT(gain) to represent the ' \
+                'uncertainties in electrons rather than counts.\n\n' \
+                'When uploading you will need to use the following details:\n' \
+                'Planet: {0}\n' \
+                'JD format: geocentric\n' \
+                'Brightness column: in flux'.format(planet_to_plot))
