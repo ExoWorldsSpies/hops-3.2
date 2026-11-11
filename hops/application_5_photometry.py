@@ -558,8 +558,6 @@ class PhotometryWindow(MainWindow):
 
                 star = self.set_target(event.xdata, event.ydata, self.targets_indication.get())
 
-                print(star)
-
                 if star == 'no_detection':
                     self.showinfo('Star not acceptable.', 'Star could not be located or it includes pixels above the saturation limit.')
                     return None
