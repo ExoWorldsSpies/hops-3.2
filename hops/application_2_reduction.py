@@ -483,7 +483,7 @@ class ReductionWindow(MainWindow):
                 self.science_counter += 1
 
                 if self.science_counter >= len(self.science_files):
-                    self.after(self.stack)
+                    self.after(self.proceed)
                 else:
                     self.after(self.reduce_science, time=self.fr_time)
 
