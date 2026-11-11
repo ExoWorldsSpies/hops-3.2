@@ -82,12 +82,10 @@ class PhotometryWindow(MainWindow):
                 [self.advanced_settings_window.Label(text='Saturation limit, relatively to the full-well depth'), 0],
                 [self.saturation, 1],
                 [self.advanced_settings_window.Label(text='(default = 0.95)'), 2]],
-            [],
             [
                 [self.advanced_settings_window.Label(text='Star FWHM in arcseconds (approximate)'), 0],
                 [self.star_size_arcsec, 1],
                 [self.advanced_settings_window.Label(text='(default = 4.0)'), 2]],
-            [],
             [
                 [self.advanced_settings_window.Label(text='Camera gain in e/ADU'), 0],
                 [self.camera_gain, 1],
@@ -560,7 +558,9 @@ class PhotometryWindow(MainWindow):
 
                 star = self.set_target(event.xdata, event.ydata, self.targets_indication.get())
 
-                if star == 'no detection':
+                print(star)
+
+                if star == 'no_detection':
                     self.showinfo('Star not acceptable.', 'Star could not be located or it includes pixels above the saturation limit.')
                     return None
 
@@ -856,7 +856,6 @@ class PhotometryWindow(MainWindow):
     def save_settings(self):
 
         self.log.set_param('show_good_comparisons', self.show_good_comparisons.get())
-        self.log.set_param('show_good_comparisons_percent', self.show_good_comparisons_percent.get())
         self.log.set_param('show_good_comparisons_percent', self.show_good_comparisons_percent.get())
         self.log.set_param('sky_inner_aperture', self.sky_inner_aperture.get())
         self.log.set_param('sky_outer_aperture', self.sky_outer_aperture.get())
