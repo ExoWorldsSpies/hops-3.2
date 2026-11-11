@@ -348,6 +348,8 @@ class PhotometryWindow(MainWindow):
         self.setup_window(setup_list, entries_wd=5)
         ##############################################################################
 
+        self.draw_arrow()
+
         self.update_window(None)
 
 
@@ -830,7 +832,15 @@ class PhotometryWindow(MainWindow):
                                   'Plate solution failed. Please check your internet connection and the '
                                   '"Star FWHM in arcseconds" value, under the "Advanced settings".')
 
+        self.draw_arrow()
+
+    def draw_arrow(self):
+
         if self.science_file in self.plate_solutions:
+
+            ra_target, dec_target = self.log.get_param('target_ra_dec').split(' ')
+            ra = exoclock.Hours(ra_target).deg()
+            dec = exoclock.Degrees(dec_target).deg_coord()
 
             target_x, target_y = SkyCoord([[ra, dec]], unit="deg").to_pixel(self.plate_solutions[self.science_file]['plate_solution'])
             dd = len(self.fits_data[0]) * 0.1
@@ -842,6 +852,7 @@ class PhotometryWindow(MainWindow):
             self.fits_figure.ax.text(target_x[0] - 0.4 * dd, target_y[0] - 0.5 * dd,
                                      text, color='r', va='top', ha='left')
             self.fits_figure.ax.add_patch(arrow)
+
             self.fits_figure.draw()
 
             # for ii in self.plate_solutions[self.science_file]['identified_stars']:
