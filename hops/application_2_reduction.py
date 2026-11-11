@@ -127,7 +127,6 @@ class ReductionWindow(MainWindow):
 
         self.progress_figure.adjust_size()
 
-        print(self.log.get_param('reduction_complete'))
 
         if self.log.get_param('reduction_complete'):
             if self.askyesno('Overwrite files', 'Reduction has been completed, do you want to run again?'):
